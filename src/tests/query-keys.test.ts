@@ -33,5 +33,16 @@ export function registerQueryKeysTests() {
       expect(key[0]).toBe("reports");
       expect(key[1]).toEqual({ from, to, owner: "user_1" });
     });
+
+    it("generates structured investments cache keys", () => {
+      expect(queryKeys.investments.all).toEqual(["investments"]);
+      expect(queryKeys.investments.portfolio("3y")).toEqual(["investments", "portfolio", "3y"]);
+      expect(queryKeys.investments.holding("hold_7")).toEqual(["investments", "holding", "hold_7"]);
+      expect(queryKeys.investments.prices()).toEqual(["investments", "prices"]);
+    });
+
+    it("defaults the investments portfolio range so invalidation stays stable", () => {
+      expect(queryKeys.investments.portfolio()).toEqual(["investments", "portfolio", "all"]);
+    });
   });
 }

@@ -9,6 +9,7 @@ import { registerStatementNormalizeTests } from "./statement-normalize.test";
 import { registerQueryKeysTests } from "./query-keys.test";
 import { registerFinanceMathTests } from "./finance-math.test";
 import { registerObservabilityTests } from "./observability.test";
+import { registerInvestmentsCalcTests } from "./investments-calc.test";
 
 async function main() {
   console.log("\n🧪 Running Paisa Regression & Verification Test Suite (Phase 4)\n");
@@ -20,6 +21,7 @@ async function main() {
   registerQueryKeysTests();
   registerFinanceMathTests();
   registerObservabilityTests();
+  registerInvestmentsCalcTests();
 
   const summary = await runTests();
 

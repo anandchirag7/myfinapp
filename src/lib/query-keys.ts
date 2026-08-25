@@ -39,4 +39,11 @@ export const queryKeys = {
     data: (from: string, to: string, owner?: string) =>
       [...queryKeys.reports.all, { from, to, owner }] as const,
   },
+  investments: {
+    all: ["investments"] as const,
+    portfolio: (range?: string) =>
+      [...queryKeys.investments.all, "portfolio", range ?? "all"] as const,
+    holding: (id: string) => [...queryKeys.investments.all, "holding", id] as const,
+    prices: () => [...queryKeys.investments.all, "prices"] as const,
+  },
 };
