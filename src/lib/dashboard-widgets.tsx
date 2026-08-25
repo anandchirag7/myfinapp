@@ -64,12 +64,12 @@ function Shell({ title, description, icon: Icon, action, children }: {
   action?: ReactNode; children: ReactNode;
 }) {
   return (
-    <Card className="h-full w-full flex flex-col overflow-hidden rounded-2xl border bg-card shadow-sm">
-      <CardHeader className="flex-none px-4 pt-3 pb-2 space-y-0">
+    <Card className="h-full w-full flex flex-col overflow-hidden rounded-3xl border bg-card/95 shadow-[0_16px_50px_-38px_rgba(20,64,48,0.55)] transition-shadow duration-200 hover:shadow-[0_20px_54px_-34px_rgba(20,64,48,0.65)]">
+      <CardHeader className="flex-none space-y-0 px-5 pb-2 pt-4">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <CardTitle className="flex items-center gap-2 text-sm font-medium text-foreground">
-              {Icon && <Icon className="h-4 w-4 text-muted-foreground" />}
+            <CardTitle className="flex items-center gap-2 text-[13px] font-semibold text-foreground">
+              {Icon && <span className="grid h-7 w-7 place-items-center rounded-xl bg-primary/8"><Icon className="h-3.5 w-3.5 text-primary" /></span>}
               <span className="truncate">{title}</span>
             </CardTitle>
             {description && (
@@ -79,7 +79,7 @@ function Shell({ title, description, icon: Icon, action, children }: {
           {action}
         </div>
       </CardHeader>
-      <CardContent className="flex-1 min-h-0 px-4 pb-4 pt-1 overflow-hidden">
+      <CardContent className="flex-1 min-h-0 overflow-hidden px-5 pb-5 pt-1">
         <div className="h-full w-full overflow-hidden">{children}</div>
       </CardContent>
     </Card>
@@ -108,15 +108,21 @@ function ComingSoon({ label }: { label: string }) {
 function NetWorthHero({ data }: any) {
   const d = data ?? {};
   return (
-    <Shell title="Total Net Worth">
-      <p className="font-display text-3xl md:text-4xl font-semibold tabular-nums">{formatINR(d.netWorth ?? 0)}</p>
-      <p className="mt-1 text-sm text-muted-foreground">{formatLakhCrore(d.netWorth ?? 0)}</p>
-      <div className="mt-4 grid grid-cols-3 gap-3 text-sm">
-        <div><p className="text-xs text-muted-foreground">Assets</p><p className="font-semibold text-success tabular-nums">{formatINR(d.assets ?? 0)}</p></div>
-        <div><p className="text-xs text-muted-foreground">Liabilities</p><p className="font-semibold text-destructive tabular-nums">{formatINR(d.liabilities ?? 0)}</p></div>
-        <div><p className="text-xs text-muted-foreground">Accounts</p><p className="font-semibold tabular-nums">{d.accountsCount ?? 0}</p></div>
-      </div>
-    </Shell>
+    <Card className="relative h-full w-full overflow-hidden rounded-3xl border-0 bg-[linear-gradient(135deg,#102f27_0%,#184936_58%,#2b6449_100%)] text-white shadow-[0_24px_60px_-34px_rgba(11,50,37,0.85)]">
+      <div aria-hidden="true" className="absolute -right-16 -top-20 h-60 w-60 rounded-full border border-white/10 bg-white/[0.035]" />
+      <CardContent className="relative flex h-full min-h-0 flex-col justify-between p-4 md:p-5">
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-100/65">Total net worth</p>
+          <p className="mt-1 font-display text-2xl font-semibold leading-tight tabular-nums md:text-3xl">{formatINR(d.netWorth ?? 0)}</p>
+          <p className="mt-0.5 text-[11px] text-emerald-100/60">{formatLakhCrore(d.netWorth ?? 0)} across your financial life</p>
+        </div>
+        <div className="mt-3 grid grid-cols-3 gap-2">
+          <div className="min-w-0 rounded-xl border border-white/10 bg-white/[0.07] px-2.5 py-2"><p className="text-[9px] uppercase tracking-wide text-emerald-100/60">Assets</p><p className="mt-0.5 text-[clamp(0.65rem,1.2vw,0.85rem)] font-semibold leading-tight tabular-nums tracking-tight text-emerald-100">{formatINR(d.assets ?? 0)}</p></div>
+          <div className="min-w-0 rounded-xl border border-white/10 bg-white/[0.07] px-2.5 py-2"><p className="text-[9px] uppercase tracking-wide text-emerald-100/60">Liabilities</p><p className="mt-0.5 text-[clamp(0.65rem,1.2vw,0.85rem)] font-semibold leading-tight tabular-nums tracking-tight text-amber-200">{formatINR(d.liabilities ?? 0)}</p></div>
+          <div className="min-w-0 rounded-xl border border-white/10 bg-white/[0.07] px-2.5 py-2"><p className="text-[9px] uppercase tracking-wide text-emerald-100/60">Accounts</p><p className="mt-0.5 text-sm font-semibold leading-tight tabular-nums">{d.accountsCount ?? 0}</p></div>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -124,7 +130,7 @@ function IncomeCard({ data }: any) {
   return (
     <Shell title="Income" icon={ArrowUpRight}>
       <p className="text-2xl font-semibold text-success tabular-nums">{formatINR(data?.income ?? 0)}</p>
-      <p className="text-xs text-muted-foreground mt-1">Period income</p>
+      <p className="mt-1 text-xs text-muted-foreground">Money in this period</p>
     </Shell>
   );
 }
@@ -132,7 +138,7 @@ function ExpenseCard({ data }: any) {
   return (
     <Shell title="Expenses" icon={ArrowDownRight}>
       <p className="text-2xl font-semibold text-destructive tabular-nums">{formatINR(data?.expense ?? 0)}</p>
-      <p className="text-xs text-muted-foreground mt-1">Period spend</p>
+      <p className="mt-1 text-xs text-muted-foreground">Money out this period</p>
     </Shell>
   );
 }

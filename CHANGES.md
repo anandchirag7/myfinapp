@@ -31,6 +31,14 @@ This file tracks all modified and newly created files along with their date of c
 - `AGENTS.md`
 - `CHANGES.md`
 
+## 2026-08-25
+- Reimagined the dashboard as a responsive money command center with a financial pulse hero, contextual highlights, quick actions, clearer workspace controls, refined widget surfaces, and a net-worth card that fits saved and newly created layouts.
+- `src/routes/_authenticated/index.tsx`
+- `src/lib/dashboard-widgets.tsx`
+- `src/lib/dashboard-templates.ts`
+- `src/styles.css`
+- `CHANGES.md`
+
 ## 2026-08-06
 - `src/lib/statement-detect.ts`
 - `src/lib/statement-parse.server.ts`
@@ -223,4 +231,3 @@ This file tracks all modified and newly created files along with their date of c
 - Fixed `Invalid hook call / Cannot read properties of null (reading 'useState')` in RootComponent by resolving QueryClient context directly from router options without extra state hook overhead
 - `src/routes/__root.tsx`
 - `CHANGES.md`
-

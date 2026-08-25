@@ -187,4 +187,14 @@
   font-feature-settings: "zero", "ss01";
 }
 
+/* ---- Dashboard canvas ---- */
+.dashboard-canvas {
+  background:
+    radial-gradient(900px 480px at 8% -8%, color-mix(in oklab, var(--primary) 7%, transparent), transparent 62%),
+    radial-gradient(700px 420px at 100% 8%, color-mix(in oklab, var(--chart-2) 7%, transparent), transparent 68%),
+    var(--background);
+}
+.dashboard-canvas .react-grid-item {
+  transition: transform 180ms ease, width 180ms ease, height 180ms ease;
+}
 
