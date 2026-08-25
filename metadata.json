@@ -1,0 +1,6 @@
+{
+  "name": "Speedy Finance Friend",
+  "description": "An upgraded, fully featured financial management application for speed and ease of tracking.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

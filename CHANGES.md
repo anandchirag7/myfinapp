@@ -1,0 +1,226 @@
+# Changes Log
+
+This file tracks all modified and newly created files along with their date of change.
+
+## 2026-08-05
+- `.env`
+- `package.json`
+- `package-lock.json`
+- `vite.config.ts`
+- `src/lib/ai-gateway.server.ts`
+- `src/routes/api/chat.ts`
+- `src/routes/auth.tsx`
+- `src/lib/statement-import.functions.ts`
+- `src/lib/statement-parse.server.ts`
+- `src/components/statement-import-dialog.tsx`
+- `src/routeTree.gen.ts`
+- `src/components/statement-import/confirm-step.tsx`
+- `src/lib/memorized-payees.functions.ts`
+- `src/integrations/supabase/client.server.ts`
+- `src/lib/statement-pipeline.server.ts`
+- `src/lib/statement-classify.server.ts`
+- `src/routes/__root.tsx`
+- `src/components/category-select-popover.tsx`
+- `src/lib/categories.functions.ts`
+- `src/routes/_authenticated/categories.tsx`
+- `src/lib/transactions.functions.ts`
+- `src/routes/_authenticated/accounts_.$accountId.tsx`
+- `src/lib/statement-parse.server.ts`
+- `src/lib/statement-import.functions.ts`
+- `supabase/migrations/20260805223000_create_emi_tables.sql`
+- `AGENTS.md`
+- `CHANGES.md`
+
+## 2026-08-06
+- `src/lib/statement-detect.ts`
+- `src/lib/statement-parse.server.ts`
+- `src/lib/statement-import.functions.ts`
+- `src/routes/_authenticated/accounts_.$accountId.tsx`
+- `src/components/statement-import/confirm-step.tsx`
+- `src/components/statement-import/review/virtualized-list.tsx`
+- `src/components/statement-import/review-step.tsx`
+- `src/components/statement-import/review/transaction-row.tsx`
+- `src/components/statement-import/review/category-combobox.tsx`
+- `src/components/statement-import/review/payee-combobox.tsx`
+- `CHANGES.md`
+
+## 2026-08-15
+- Enhanced authentication flow with auto-confirmation and fallback for email verification in `src/routes/auth.tsx` and `src/lib/auth.functions.ts`
+- Added server-side admin user provisioning and auto-confirmation for demo account in `src/lib/demo.functions.ts`
+- Fixed invalid hook call and HeadContent useContext error by structuring RootDocument inside RootComponent and adding explicit deduplication for react, @tanstack/react-router, and @tanstack/react-start in vite.config.ts
+- Resolved SSR hydration mismatch error by removing conflicting `ssr: false` route overrides in `src/routes/auth.tsx`, `src/routes/_authenticated/route.tsx`, and `src/routes/[.]lovable.oauth.consent.tsx`
+- Pulled latest code from `dev1` branch of `https://github.com/anandchirag7/Speedy-Finance-Friend.git`
+- Integrated multi-category split transaction dialog support, import history scrollbar improvements, high confidence review workflows, and category pagination updates
+- Updated TanStack Start and MCP server configuration in `vite.config.ts`
+- Added hydration safety enhancements in `src/routes/__root.tsx`, `src/components/theme-provider.tsx`, and `src/routes/auth.tsx`
+- `vite.config.ts`
+- `src/styles.css`
+- `src/routes/__root.tsx`
+- `src/components/theme-provider.tsx`
+- `src/routes/auth.tsx`
+- `src/components/split-transaction-dialog.tsx`
+- `src/components/statement-import/confirm-step.tsx`
+- `src/components/statement-import/review/types.ts`
+- `src/components/statement-import-dialog.tsx`
+- `src/components/statement-archive-card.tsx`
+- `src/components/category-select-popover.tsx`
+- `src/lib/categories.functions.ts`
+- `src/lib/transactions.functions.ts`
+- `src/lib/statement-import.functions.ts`
+- `src/lib/statement-pipeline.server.ts`
+- `src/lib/statement-classify.server.ts`
+- `src/lib/statement-clusters.ts`
+- `src/lib/statement-detect.ts`
+- `src/lib/finance.functions.ts`
+- `src/lib/memorized-payees.functions.ts`
+- `src/routes/_authenticated/accounts_.$accountId.tsx`
+- `src/routes/_authenticated/categories.tsx`
+- `src/routes/_authenticated/payees.tsx`
+- `src/routes/_authenticated/reports.tsx`
+- `src/routes/_authenticated/route.tsx`
+- `src/routes/_authenticated/settings.tsx`
+- `src/routes/_authenticated/transactions.tsx`
+- `src/routes/[.]lovable.oauth.consent.tsx`
+- `src/routes/mcp.ts`
+- `src/routeTree.gen.ts`
+- `CHANGES.md`
+
+## 2026-08-18
+- Fixed `Uncaught TypeError: import_browser_external_node_async_hooks.AsyncLocalStorage is not a constructor` by removing `@tanstack/react-start` from Vite browser `optimizeDeps.include` to prevent server context modules from being bundled into client builds
+- Fixed `Cannot read properties of null (reading 'useContext')` and `Invalid hook call` in `<AuthPage>` and other route components by replacing raw `Route.useSearch()`, `Route.useParams()`, and `Route.useRouteContext()` with TanStack Router hooks (`useSearch({ strict: false })`, `useParams({ strict: false })`, `useRouteContext({ strict: false })`)
+- `src/routes/auth.tsx`
+- `src/routes/__root.tsx`
+- `src/routes/_authenticated/accounts_.$accountId.tsx`
+- `src/routes/_authenticated/chat.$threadId.tsx`
+- `src/routes/_authenticated/transactions.tsx`
+- `src/routes/[.]lovable.oauth.consent.tsx`
+- `vite.config.ts`
+- `CHANGES.md`
+
+- Fixed `accounts.map is not a function` error boundary crash by safeguarding account queries and adding safe array fallback checks to `AccountPicker`, `MultiPicker`, and `import-step.tsx`
+- Added "Remember me" option on the login and signup screens with client-side credential persistence, auto-population, and quick clear controls
+- Fixed "No household" error by implementing resilient self-healing `getHouseholdId` helper in `src/lib/household.server.ts` that automatically provisions and links households for any user
+- Updated all server functions to use the resilient household resolution logic
+- Created Supabase migration `supabase/migrations/20260816000000_fix_user_households_trigger.sql` for trigger updates and existing user backfills
+- Fixed `Cannot read properties of null (reading 'useContext')` and `Invalid hook call` crash by importing `PieChartIcon` from `lucide-react` instead of passing the Recharts `PieChart` component as an icon in dashboard widgets
+- Cleaned up inline `useServerFn` hook calls within `useMutation` options in `categories.tsx`
+- Phase 1 Performance Optimization: Added high-performance PostgreSQL composite/partial indexes for 1M+ transactions & 5k+ categories
+- Phase 1 Performance Optimization: Added stored procedures `recompute_account_balance`, `get_categories_with_usage`, `get_dashboard_cashflow`, and `get_dashboard_top_spend`
+- Phase 1 Performance Optimization: Eliminated unbounded in-memory loops in `listCategoriesWithUsage`, `recomputeAccountBalance`, and `getDashboard`
+- Phase 2 Bundle Optimization: Refactored `jspdf` and `jspdf-autotable` to dynamic imports across `statement-export.ts`, `reports-pdf.ts`, and `report-exports.functions.ts`
+- Phase 2 Bundle Optimization: Configured Rollup manual chunking in `vite.config.ts` for export engines, charts, icons, and table utilities
+- Phase 3 Architecture: Implemented centralized query key factory `src/lib/query-keys.ts` with tenant-aware invalidation patterns
+- Phase 3 Architecture: Standardized React Query cache policies and stale-times across `categories.tsx`, `transactions.tsx`, and `index.tsx`
+- Resolved `[plugin unwasm] Failed to load the WebAssembly module: Cannot resolve module 'env'` by completely decoupling Shiki/Oniguruma WASM dependencies from Streamdown plugins
+- Fixed `Cannot read properties of null (reading 'useContext')` and `Invalid hook call` in `<AuthPage>` by removing manualChunks chunk splitting that caused React module graph separation in SSR and client builds
+- `package.json`
+- `src/components/ai-elements/message.tsx`
+- `src/lib/query-keys.ts`
+- `src/routes/_authenticated/index.tsx`
+- `src/lib/statement-export.ts`
+- `src/lib/reports-pdf.ts`
+- `src/lib/report-exports.functions.ts`
+- `vite.config.ts`
+- `supabase/migrations/20260817000000_performance_indexes_and_rpc.sql`
+- `src/lib/statement-audit.server.ts`
+- `src/routes/_authenticated/transactions.tsx`
+- `src/components/statement-import/import-step.tsx`
+- `src/routes/auth.tsx`
+- `src/lib/household.server.ts`
+- `src/lib/finance.functions.ts`
+- `src/lib/bills.functions.ts`
+- `src/lib/categories.functions.ts`
+- `src/lib/transactions.functions.ts`
+- `src/lib/budgets.functions.ts`
+- `src/lib/payee-rules.functions.ts`
+- `src/lib/memorized-payees.functions.ts`
+- `src/lib/statement-audit.functions.ts`
+- `src/lib/statement-pipeline.server.ts`
+- `src/lib/statement-import.functions.ts`
+- `src/lib/statement-archive.functions.ts`
+- `src/lib/chat.functions.ts`
+- `src/lib/dashboards.functions.ts`
+- `src/lib/data-reset.functions.ts`
+- `src/lib/reports-fetch.ts`
+- `src/lib/profile.functions.ts`
+- `src/routes/api/chat.ts`
+- `src/lib/dashboard-widgets.tsx`
+- `src/routes/_authenticated/categories.tsx`
+- `supabase/migrations/20260816000000_fix_user_households_trigger.sql`
+- `CHANGES.md`
+
+## 2026-08-18
+- Fixed `Uncaught TypeError: import_browser_external_node_async_hooks.AsyncLocalStorage is not a constructor` by excluding server-only `@tanstack/react-start` packages from browser `optimizeDeps` while bundling `@tanstack/react-router`, `@tanstack/react-query`, and React to ensure a unified singleton instance without Node.js `async_hooks` leaks
+- Fixed `Invalid hook call` and `Cannot read properties of null (reading 'useContext')` by configuring `optimizeDeps.include` in `vite.config.ts` to bundle `@tanstack/react-router` and `@tanstack/react-query` with React, preventing shallow CJS interop copy of React namespace
+- Stabilized `QueryClientProvider` fallback client instantiation inside `src/routes/__root.tsx` using `useState`
+- Fixed missing `profile` reference in `src/lib/reports-fetch.ts` and `src/routes/api/chat.ts`
+- Fixed navigate search requirement in `src/components/budgets/BudgetAnalytics.tsx`
+- Fixed accountId nullability prop typing in `src/routes/_authenticated/accounts_.$accountId.tsx`
+- Fixed type comparisons in `src/lib/memorized-payees.functions.ts`
+- `vite.config.ts`
+- `src/routes/__root.tsx`
+- `src/lib/reports-fetch.ts`
+- `src/routes/api/chat.ts`
+- `src/components/budgets/BudgetAnalytics.tsx`
+- `src/routes/_authenticated/accounts_.$accountId.tsx`
+- `src/lib/memorized-payees.functions.ts`
+- `src/lib/statement-classify.server.ts`
+- `src/lib/statement-clusters.ts`
+- `src/components/statement-import-dialog.tsx`
+- `src/tests/statement-normalize.test.ts`
+- `src/lib/categories.functions.ts`
+- `src/lib/finance.functions.ts`
+- `src/lib/observability.ts`
+- `src/lib/performance-monitor.ts`
+- `src/lib/statement-detect.ts`
+- `src/tests/test-framework.ts`
+- `src/tests/format.test.ts`
+- `src/tests/statement-detect.test.ts`
+- `src/tests/statement-normalize.test.ts`
+- `src/tests/query-keys.test.ts`
+- `src/tests/finance-math.test.ts`
+- `src/tests/observability.test.ts`
+- `src/tests/test-runner.ts`
+- `src/integrations/supabase/client.ts`
+- `src/integrations/supabase/client.server.ts`
+- `src/integrations/supabase/auth-middleware.ts`
+- `src/routes/_authenticated/route.tsx`
+- `src/routes/auth.tsx`
+- `src/routes/__root.tsx`
+- `src/start.ts`
+- `vite.config.ts`
+- `package.json`
+- `CHANGES.md`
+
+## 2026-08-24
+- Fixed app boot issue where `src/App.tsx` was returning an empty container by properly wiring `RouterProvider` with `getRouter()` and enabling dual client-SPA/SSR document mounting in `src/routes/__root.tsx`
+- Cleaned up leftover `temp_repo` and `speedy-finance-friend-dev1` temporary directories for a clean workspace structure
+- `src/App.tsx`
+- `src/routes/__root.tsx`
+- `index.html`
+- `src/main.tsx`
+- `src/start.ts`
+- `src/server.ts`
+- `src/lib/error-capture.ts`
+- `vite.config.ts`
+- `CHANGES.md`
+- Fixed `Invalid hook call / Cannot read properties of null (reading 'useSyncExternalStore')` by configuring explicit path aliases for `react`, `react-dom`, `react/jsx-runtime` and bundling `@tanstack/react-router` & `@tanstack/react-store` in `optimizeDeps.include` while strictly keeping only server-side TanStack Start packages in `optimizeDeps.exclude`
+- `vite.config.ts`
+- `CHANGES.md`
+- Fixed `AsyncLocalStorage is not a constructor` error by excluding `@tanstack/react-start` and `@tanstack/react-router` in `optimizeDeps.exclude` in `vite.config.ts`, preventing Node server modules from being bundled into client dependency optimization
+- `vite.config.ts`
+- Fixed bank statement import popup close button by removing blocked window.confirm call, adding right-padding to header stepper, and setting explicit z-50 on dialog close button
+- `vite.config.ts`
+- Fixed `dashboards.find is not a function` error by adding robust array validation and fallback handlers to `listDashboards`, index route, and dashboard builder component
+- `src/lib/dashboards.functions.ts`
+- `src/routes/_authenticated/index.tsx`
+- `src/components/dashboard-builder.tsx`
+- `src/components/ui/dialog.tsx`
+- `src/components/statement-import-dialog.tsx`
+- Fixed SSR `HTTPError` / `forwardRef is not a function` by wiring TanStack Start router and start entry hooks in `src/server.ts`, normalizing React resolution aliases in `vite.config.ts`, and establishing robust SSR request routing
+- `src/server.ts`
+- `vite.config.ts`
+- Fixed `Invalid hook call / Cannot read properties of null (reading 'useState')` in RootComponent by resolving QueryClient context directly from router options without extra state hook overhead
+- `src/routes/__root.tsx`
+- `CHANGES.md`
+
