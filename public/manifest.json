@@ -1,0 +1,17 @@
+{
+  "name": "Paisa",
+  "short_name": "Paisa",
+  "description": "Track net worth, cash flow, investments, and every kind of account in one place.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/favicon.ico",
+      "sizes": "64x64 32x32 16x16",
+      "type": "image/x-icon"
+    }
+  ]
+}

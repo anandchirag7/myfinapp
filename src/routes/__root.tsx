@@ -88,12 +88,13 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Paisa — Personal Finance for India" },
-      { name: "description", content: "Track net worth, cash flow, investments, and every kind of Indian account in one place — from PPF and EPF to mutual funds, SGB and chit funds." },
-      { property: "og:title", content: "Paisa — Personal Finance for India" },
+      { title: "Paisa — Personal Finance Manager" },
+      { name: "description", content: "Track net worth, cash flow, investments, and every kind of account in one place — from savings and credit cards to mutual funds and fixed deposits." },
+      { property: "og:title", content: "Paisa — Personal Finance Manager" },
       { property: "og:description", content: "Your money, in one place." },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
+      { name: "theme-color", content: "#0f172a" },
     ],
     links: [
       { rel: "stylesheet", href: appCss },
@@ -101,6 +102,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" },
       { rel: "stylesheet", href: "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=JetBrains+Mono:wght@400;500;600&display=swap" },
       { rel: "icon", href: "/favicon.ico", type: "image/x-icon" },
+      { rel: "manifest", href: "/manifest.json" },
     ],
     scripts: [
       {

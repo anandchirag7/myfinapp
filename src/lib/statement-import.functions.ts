@@ -278,14 +278,14 @@ export const inspectStatementWithAI = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => inspectAiInput.parse(d))
   .handler(async ({ data }) => {
-    const apiKey = process.env.LOVABLE_API_KEY;
-    const baseURL = process.env.OLLAMA_BASE_URL || "https://ai.gateway.lovable.dev/v1";
+    const apiKey = process.env.AI_API_KEY;
+    const baseURL = process.env.OLLAMA_BASE_URL;
     const model = process.env.OLLAMA_MODEL || "google/gemini-2.5-flash";
 
-    if (!apiKey && !process.env.OLLAMA_BASE_URL) return null;
+    if (!baseURL) return null;
 
     const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (apiKey) headers["Lovable-API-Key"] = apiKey;
+    if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
 
     try {
       const res = await fetch(`${baseURL}/chat/completions`, {

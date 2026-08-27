@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@supabase/supabase-js";
 import { convertToModelMessages, streamText, tool, stepCountIs, type UIMessage } from "ai";
 import { z } from "zod";
-import { createLovableAiGatewayProvider } from "@/lib/ai-gateway.server";
+import { createAiProvider } from "@/lib/ai-gateway.server";
 import { getHouseholdId } from "@/lib/household.server";
 
 function makeSupabase(token: string) {
@@ -50,10 +50,10 @@ export const Route = createFileRoute("/api/chat")({
         const threadId = body.threadId;
         if (!threadId) return new Response("Missing threadId", { status: 400 });
 
-        const key = process.env.LOVABLE_API_KEY;
-        if (!key && !process.env.OLLAMA_BASE_URL) return new Response("Missing LOVABLE_API_KEY or OLLAMA_BASE_URL", { status: 500 });
+        const key = process.env.AI_API_KEY;
+        if (!process.env.OLLAMA_BASE_URL) return new Response("Missing OLLAMA_BASE_URL", { status: 500 });
 
-        const gateway = createLovableAiGatewayProvider(key);
+        const gateway = createAiProvider(key);
         const modelName = process.env.OLLAMA_MODEL || "openai/gpt-5.5";
 
         // Pre-fetch quick context summary for the system prompt.

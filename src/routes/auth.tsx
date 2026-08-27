@@ -8,7 +8,6 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { supabase } from "@/integrations/supabase/client";
-import { lovable } from "@/integrations/lovable";
 import { ensureDemoAccount } from "@/lib/demo.functions";
 import { confirmUserAccount } from "@/lib/auth.functions";
 import { Sparkles } from "lucide-react";

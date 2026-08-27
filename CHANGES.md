@@ -2,6 +2,43 @@
 
 This file tracks all modified and newly created files along with their date of change.
 
+## 2026-08-27
+- Decoupled from Lovable platform dependencies and made the application production-ready for global deployment.
+- Hardened environment variables (removed fallback credentials across client, server, and middleware).
+- Added multi-stage `Dockerfile`, `.dockerignore`, `vercel.json`, PWA `manifest.json`, `robots.txt`.
+- Replaced Lovable AI gateway with generic OpenAI-compatible AI SDK provider.
+- Cleaned and regenerated TanStack Router route tree.
+- `vite.config.ts`
+- `package.json`
+- `src/lib/lovable-error-reporting.ts`
+- `src/integrations/lovable/index.ts`
+- `src/lib/ai-gateway.server.ts`
+- `src/routes/auth.tsx`
+- `src/lib/whatsapp.server.ts`
+- `src/lib/transactions.functions.ts`
+- `src/lib/statement-parse.server.ts`
+- `src/lib/statement-import.functions.ts`
+- `src/lib/statement-pipeline.server.ts`
+- `src/lib/statement-audit.server.ts`
+- `src/routes/api/public/hooks/statement-classify.ts`
+- `src/routes/api/chat.ts`
+- `src/integrations/supabase/client.ts`
+- `src/integrations/supabase/client.server.ts`
+- `src/integrations/supabase/auth-middleware.ts`
+- `.env.example`
+- `index.html`
+- `public/manifest.json`
+- `public/robots.txt`
+- `src/routes/__root.tsx`
+- `src/lib/auth.functions.ts`
+- `.gitignore`
+- `Dockerfile`
+- `.dockerignore`
+- `vercel.json`
+- `README.md`
+- `src/routeTree.gen.ts`
+- `CHANGES.md`
+
 ## 2026-08-05
 - `.env`
 - `package.json`

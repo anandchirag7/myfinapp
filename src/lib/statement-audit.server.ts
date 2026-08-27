@@ -300,8 +300,11 @@ export async function recomputeAccountBalance(
 }
 
 /**
- * Best-effort import notification email. Silently reports why it did not send
- * (no verified sending domain / preference off) instead of throwing.
+ * Best-effort import notification email. For production, configure a proper
+ * email provider (e.g., Resend, Postmark, SendGrid) by setting
+ * SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, and EMAIL_FROM env vars.
+ *
+ * Currently stubs as not-configured since the Lovable email service has been removed.
  */
 export async function sendImportEmail(opts: {
   to: string;
@@ -310,35 +313,12 @@ export async function sendImportEmail(opts: {
   lines: string[];
   ok: boolean;
 }): Promise<{ sent: boolean; reason?: string }> {
-  const apiKey = process.env['LOVABLE_API_KEY'];
-  if (!apiKey) return { sent: false, reason: "Email sending is not configured for this app." };
-  const domain = process.env['LOVABLE_EMAIL_DOMAIN'];
-  if (!domain) {
-    return { sent: false, reason: "No verified email domain is set up yet, so no email was sent." };
-  }
-  try {
-    const { sendLovableEmail } = await import("@lovable.dev/email-js");
-    const color = opts.ok ? "#0f766e" : "#b91c1c";
-    const html = `<div style="font-family:ui-sans-serif,system-ui,sans-serif;color:#0f172a">
-      <h2 style="color:${color};margin:0 0 12px">${opts.heading}</h2>
-      <ul style="padding-left:18px;line-height:1.6">${opts.lines
-        .map((l) => `<li>${l}</li>`)
-        .join("")}</ul>
-      <p style="color:#64748b;font-size:12px;margin-top:16px">Paisa · statement import notifications</p>
-    </div>`;
-    const res = await sendLovableEmail(
-      {
-        to: opts.to,
-        from: `notifications@${domain}`,
-        subject: opts.subject,
-        html,
-        text: `${opts.heading}\n\n${opts.lines.join("\n")}`,
-        purpose: "statement-import-notification",
-      },
-      { apiKey },
-    );
-    return res?.success ? { sent: true } : { sent: false, reason: "The email provider rejected the message." };
-  } catch (e: any) {
-    return { sent: false, reason: e?.message ?? "Email sending failed." };
-  }
+  // TODO: Integrate a production email provider (Resend, Postmark, etc.)
+  console.info(
+    `[Email Stub] Would send "${opts.subject}" to ${opts.to}:`,
+    opts.heading,
+    opts.lines.join("; "),
+  );
+  return { sent: false, reason: "Email sending is not yet configured for production. Configure an email provider." };
 }
+

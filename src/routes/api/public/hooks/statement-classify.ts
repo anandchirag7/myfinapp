@@ -52,7 +52,7 @@ export const Route = createFileRoute("/api/public/hooks/statement-classify")({
           return new Response("ok");
         }
 
-        const apiKey = process.env['LOVABLE_API_KEY'];
+        const apiKey = process.env['AI_API_KEY'];
         if (!apiKey) {
           await supabaseAdmin
             .from("statement_uploads")

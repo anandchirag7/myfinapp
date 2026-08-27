@@ -1,0 +1,10 @@
+# Paisa — robots.txt
+User-agent: *
+Allow: /
+
+# Disallow private routes
+Disallow: /api/
+Disallow: /_authenticated/
+
+# Sitemap (update with your production domain)
+# Sitemap: https://yourdomain.com/sitemap.xml

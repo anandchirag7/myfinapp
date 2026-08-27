@@ -1,8 +1,10 @@
-// Server-only helper to send WhatsApp messages via Twilio (through the Lovable connector gateway).
+// Server-only helper to send WhatsApp messages via Twilio.
 // Returns { ok, sid?, error? }. Silently returns { ok: false, error: "not_configured" }
 // when Twilio credentials are missing so the reminder job can no-op gracefully.
-
-const GATEWAY_URL = "https://connector-gateway.lovable.dev/twilio";
+//
+// For production, configure TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_WHATSAPP_FROM
+// to use Twilio's API directly. This implementation currently stubs as not_configured
+// since the Lovable connector gateway has been removed.
 
 export interface SendWhatsAppInput {
   to: string;           // E.164 with or without leading +
@@ -23,20 +25,20 @@ function normalizeFrom(raw: string): string {
 }
 
 export async function sendWhatsApp(input: SendWhatsAppInput): Promise<{ ok: boolean; sid?: string; error?: string }> {
-  const lovableKey = process.env.LOVABLE_API_KEY;
-  const twilioKey = process.env.TWILIO_API_KEY;
+  const accountSid = process.env.TWILIO_ACCOUNT_SID;
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
   const from = process.env.TWILIO_WHATSAPP_FROM;
 
-  if (!lovableKey || !twilioKey || !from) {
+  if (!accountSid || !authToken || !from) {
     return { ok: false, error: "not_configured" };
   }
 
   try {
-    const response = await fetch(`${GATEWAY_URL}/Messages.json`, {
+    const url = `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`;
+    const response = await fetch(url, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${lovableKey}`,
-        "X-Connection-Api-Key": twilioKey,
+        Authorization: `Basic ${btoa(`${accountSid}:${authToken}`)}`,
         "Content-Type": "application/x-www-form-urlencoded",
       },
       body: new URLSearchParams({
@@ -59,5 +61,5 @@ export async function sendWhatsApp(input: SendWhatsAppInput): Promise<{ ok: bool
 }
 
 export function isWhatsAppConfigured(): boolean {
-  return Boolean(process.env.LOVABLE_API_KEY && process.env.TWILIO_API_KEY && process.env.TWILIO_WHATSAPP_FROM);
+  return Boolean(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_WHATSAPP_FROM);
 }

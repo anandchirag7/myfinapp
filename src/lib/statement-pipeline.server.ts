@@ -73,8 +73,8 @@ async function parseFile(
   }
 
   if (isPdf) {
-    const apiKey = process.env['LOVABLE_API_KEY'];
-    if (!apiKey && !process.env.OLLAMA_BASE_URL) throw new Error("Missing LOVABLE_API_KEY or OLLAMA_BASE_URL");
+    const apiKey = process.env['AI_API_KEY'];
+    if (!process.env.OLLAMA_BASE_URL) throw new Error("Missing OLLAMA_BASE_URL environment variable");
     const { data: cats } = await supabase
       .from("categories")
       .select("name")

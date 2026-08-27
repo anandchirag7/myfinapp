@@ -3,32 +3,21 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Paisa — Personal Finance for India</title>
-    <script>
-      if (typeof globalThis !== 'undefined') {
-        if (!globalThis.module) {
-          globalThis.module = { exports: {} };
-        }
-        if (!globalThis.exports) {
-          globalThis.exports = globalThis.module.exports;
-        }
-        if (!globalThis.global) {
-          globalThis.global = globalThis;
-        }
-        if (!globalThis.require) {
-          globalThis.require = function(id) {
-            return globalThis.module?.exports || {};
-          };
-          globalThis.require.resolve = function(id) { return id; };
-          globalThis.require.cache = {};
-          globalThis.require.extensions = {};
-        }
-      }
-    </script>
+    <title>Paisa — Personal Finance Manager</title>
+    <meta name="description" content="Track net worth, cash flow, investments, and every kind of account in one place — from savings and credit cards to mutual funds and fixed deposits." />
+    <meta name="theme-color" content="#0f172a" />
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="icon" href="/favicon.ico" type="image/x-icon" />
+    <link rel="apple-touch-icon" href="/favicon.ico" />
   </head>
   <body>
     <div id="root"></div>
+    <noscript>
+      <div style="padding:2rem;text-align:center;font-family:system-ui,sans-serif">
+        <h1>Paisa requires JavaScript</h1>
+        <p>Please enable JavaScript in your browser to use this application.</p>
+      </div>
+    </noscript>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
-

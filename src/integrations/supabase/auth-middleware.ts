@@ -45,12 +45,14 @@ export const requireSupabaseAuth = createMiddleware({ type: 'function' }).server
   async ({ next }) => {
     const SUPABASE_URL =
       getEnvVar('SUPABASE_URL') ||
-      getEnvVar('VITE_SUPABASE_URL') ||
-      'https://slbxzzbpsiabyrelepax.supabase.co';
+      getEnvVar('VITE_SUPABASE_URL');
     const SUPABASE_PUBLISHABLE_KEY =
       getEnvVar('SUPABASE_PUBLISHABLE_KEY') ||
-      getEnvVar('VITE_SUPABASE_PUBLISHABLE_KEY') ||
-      'sb_publishable_96bCaYzUkH2x4Hrp5W4I_Q_py70SQKa';
+      getEnvVar('VITE_SUPABASE_PUBLISHABLE_KEY');
+
+    if (!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY) {
+      throw new Error('Missing Supabase configuration. Set SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY environment variables.');
+    }
     
     const request = getRequest();
 

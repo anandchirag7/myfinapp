@@ -1,36 +1,19 @@
-type LovableErrorOptions = {
-  mechanism?: "manual" | "onerror" | "unhandledrejection" | "react_error_boundary";
-  handled?: boolean;
-  severity?: "error" | "warning" | "info";
-};
-
-type LovableEvents = {
-  captureException?: (
-    error: unknown,
-    context?: Record<string, unknown>,
-    options?: LovableErrorOptions,
-  ) => void;
-};
-
-declare global {
-  interface Window {
-    __lovableEvents?: LovableEvents;
-  }
-}
-
-export function reportLovableError(error: unknown, context: Record<string, unknown> = {}) {
+/**
+ * Generic error reporter — replaces the Lovable-specific reporter.
+ * In production, integrate Sentry, LogRocket, or your preferred service here.
+ */
+export function reportError(error: unknown, context: Record<string, unknown> = {}) {
   if (typeof window === "undefined") return;
-  window.__lovableEvents?.captureException?.(
-    error,
+  console.error(
+    "[Paisa Error]",
     {
-      source: "react_error_boundary",
+      source: context.boundary ?? "unknown",
       route: window.location.pathname,
       ...context,
     },
-    {
-      mechanism: "react_error_boundary",
-      handled: false,
-      severity: "error",
-    },
+    error,
   );
 }
+
+// Re-export with old name for backward compatibility during migration
+export const reportLovableError = reportError;

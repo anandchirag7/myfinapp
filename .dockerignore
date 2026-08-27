@@ -1,0 +1,39 @@
+# Dependencies
+node_modules
+npm-debug.log*
+
+# Git
+.git
+.gitignore
+
+# Environment (will be injected at runtime)
+.env
+.env.*
+
+# Build artifacts (will be rebuilt inside container)
+dist
+dist-ssr
+.output
+.vinxi
+.tanstack
+.nitro
+
+# Dev tools
+.wrangler
+.vercel
+.netlify
+.lovable
+scratch/
+
+# IDE
+.vscode
+.idea
+*.sw?
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docs
+*.md
+!README.md

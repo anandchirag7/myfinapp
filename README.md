@@ -1,20 +1,65 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# Paisa — Personal Finance Manager
 
-# Run and deploy your AI Studio app
+Track net worth, cash flow, investments, and every kind of account in one place.
 
-This contains everything you need to run your app locally.
+## Tech Stack
 
-View your app in AI Studio: https://ai.studio/apps/15de3838-16f6-426e-a1cf-d1362d87d002
+- **Frontend**: React 19 + TanStack Router + TanStack Start (SSR)
+- **Styling**: Tailwind CSS 4 + Radix UI primitives
+- **Backend**: TanStack Start server functions (Nitro)
+- **Database**: Supabase (PostgreSQL + Auth + Row Level Security)
+- **AI Chat**: OpenAI-compatible API via Vercel AI SDK
 
-## Run Locally
+## Getting Started
 
-**Prerequisites:**  Node.js
+```bash
+# 1. Install dependencies
+npm install
 
+# 2. Copy and configure environment variables
+cp .env.example .env
+# Edit .env with your Supabase and AI provider credentials
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+# 3. Start development server
+npm run dev
+```
+
+## Production Deployment
+
+```bash
+# Build for production
+npm run build
+
+# Start the production server
+npm start
+```
+
+### Docker
+
+```bash
+docker build -t paisa-app .
+docker run -p 3000:3000 --env-file .env paisa-app
+```
+
+### Vercel
+
+```bash
+vercel --prod
+```
+
+See `.env.example` for all required environment variables.
+
+## Project Structure
+
+```
+src/
+├── routes/          # File-based routing (TanStack Router)
+│   ├── __root.tsx   # App shell
+│   ├── auth.tsx     # Authentication page
+│   ├── _authenticated/  # Protected routes
+│   └── api/         # Server API routes
+├── components/      # React components
+├── integrations/    # Supabase client + auth
+├── lib/             # Business logic, server functions
+└── hooks/           # Custom React hooks
+```

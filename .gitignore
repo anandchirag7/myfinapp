@@ -1,6 +1,7 @@
 # Environment variables
 .env
 .env.*
+!.env.example
 
 # Scratch directory
 scratch/
@@ -27,6 +28,14 @@ dist-ssr
 .wrangler/
 .dev.vars
 
+# Deployment platforms
+.vercel/
+.netlify/
+.railway/
+
+# Docker
+docker-compose.override.yml
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
@@ -37,3 +46,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# OS files
+Thumbs.db
+Desktop.ini

@@ -258,7 +258,8 @@ export async function parsePdfWithAI(
   payeeList: string,
   apiKey?: string,
 ): Promise<{ transactions: ExtractedTxn[] }> {
-  const baseURL = process.env.OLLAMA_BASE_URL || "https://ai.gateway.lovable.dev/v1";
+  const baseURL = process.env.OLLAMA_BASE_URL;
+  if (!baseURL) throw new Error("Missing OLLAMA_BASE_URL environment variable.");
   const model = process.env.OLLAMA_MODEL || "google/gemini-2.5-flash";
 
   const systemPrompt = `You extract bank/credit-card statement transactions from a PDF.
@@ -275,7 +276,7 @@ Rules:
 - Do not invent transactions`;
 
   const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (apiKey) headers["Lovable-API-Key"] = apiKey;
+  if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
 
   const res = await fetch(`${baseURL}/chat/completions`, {
     method: "POST",
