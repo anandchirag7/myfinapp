@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { Slider } from "@/components/ui/slider";
 import { Button } from "@/components/ui/button";
 import { AlertTriangle, Trash2 } from "lucide-react";
 import { useTheme } from "@/components/theme-provider";
@@ -29,21 +30,26 @@ function SettingsPage() {
 
   const [waNumber, setWaNumber] = useState("");
   const [waEnabled, setWaEnabled] = useState(false);
+  const [autoApprovePercent, setAutoApprovePercent] = useState(80);
   const [resetOpen, setResetOpen] = useState(false);
-
 
   useEffect(() => {
     if (data) {
       setWaNumber((data as any).whatsapp_number ?? "");
       setWaEnabled(!!(data as any).whatsapp_reminders_enabled);
+      setAutoApprovePercent(Math.round(Number((data as any).auto_approve_threshold ?? 0.8) * 100));
     }
   }, [data]);
 
   const save = useMutation({
-    mutationFn: async () => updFn({ data: {
-      whatsapp_number: waNumber.trim() || null,
-      whatsapp_reminders_enabled: waEnabled,
-    } }),
+    mutationFn: async () =>
+      updFn({
+        data: {
+          whatsapp_number: waNumber.trim() || null,
+          whatsapp_reminders_enabled: waEnabled,
+          auto_approve_threshold: autoApprovePercent / 100,
+        },
+      }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["me-profile"] });
       toast.success("Settings saved");
@@ -73,10 +79,48 @@ function SettingsPage() {
 
       <Card>
         <CardHeader>
+          <CardTitle>Statement import</CardTitle>
+          <CardDescription>
+            Choose how confident the categorization pipeline must be before it skips payee
+            confirmation.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <Label htmlFor="auto-approve-threshold">Auto-approve threshold</Label>
+              <p className="text-xs text-muted-foreground">
+                Higher values show the confirmation screen more often. The recommended default is
+                80%.
+              </p>
+            </div>
+            <span className="min-w-12 rounded-md border bg-muted/40 px-2 py-1 text-center text-sm font-semibold tabular-nums">
+              {autoApprovePercent}%
+            </span>
+          </div>
+          <Slider
+            id="auto-approve-threshold"
+            min={0}
+            max={100}
+            step={5}
+            value={[autoApprovePercent]}
+            onValueChange={(value) => setAutoApprovePercent(value[0] ?? 80)}
+            aria-label="Statement import auto-approve threshold"
+          />
+          <div className="flex justify-end">
+            <Button onClick={() => save.mutate()} disabled={save.isPending}>
+              {save.isPending ? "Savingâ€¦" : "Save import setting"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
           <CardTitle>WhatsApp reminders</CardTitle>
           <CardDescription>
-            Get a WhatsApp message on each configured reminder day for your bills.
-            Individual bills can override this number.
+            Get a WhatsApp message on each configured reminder day for your bills. Individual bills
+            can override this number.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -95,7 +139,9 @@ function SettingsPage() {
               onChange={(e) => setWaNumber(e.target.value)}
               placeholder="+91 98xxxxxxxx"
             />
-            <p className="text-xs text-muted-foreground">Include the country code. This is the default recipient.</p>
+            <p className="text-xs text-muted-foreground">
+              Include the country code. This is the default recipient.
+            </p>
           </div>
           <div className="flex justify-end">
             <Button onClick={() => save.mutate()} disabled={save.isPending}>
@@ -108,7 +154,6 @@ function SettingsPage() {
       <StatementArchiveCard />
 
       <Card>
-
         <CardHeader>
           <CardTitle>Privacy</CardTitle>
           <CardDescription>App-lock and biometric protection.</CardDescription>
@@ -126,12 +171,14 @@ function SettingsPage() {
             <AlertTriangle className="h-4 w-4" /> Danger zone
           </CardTitle>
           <CardDescription>
-            Delete your data — accounts, transactions, bills, reminders, budgets and more. You choose exactly what gets
-            erased. This cannot be undone.
+            Delete your data — accounts, transactions, bills, reminders, budgets and more. You
+            choose exactly what gets erased. This cannot be undone.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap items-center justify-between gap-3">
-          <p className="text-sm text-muted-foreground">Factory reset removes everything and gives you a clean slate.</p>
+          <p className="text-sm text-muted-foreground">
+            Factory reset removes everything and gives you a clean slate.
+          </p>
           <Button variant="destructive" onClick={() => setResetOpen(true)}>
             <Trash2 className="mr-1.5 h-4 w-4" /> Delete data
           </Button>

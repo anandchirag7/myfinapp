@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { toast } from "sonner";
 import {
   Search,
   ChevronRight,
@@ -52,20 +53,29 @@ import {
   splitCluster,
   summarize,
   getClusterTier,
-  approveHighConfidenceClusters,
   groupClustersByCategory,
-  type CategoryClusterGroup,
 } from "@/lib/statement-clusters";
+import { buildCategoryIndex, categorizeByKeywords } from "@/lib/category-resolver";
 import { MatchSourceBadge, StatusBadge, ConfidenceMeter } from "./badges";
 import { cn } from "@/lib/utils";
 import { CategorySelectPopover, type CategoryItem } from "@/components/category-select-popover";
 
-type Category = { id: string; name: string; parent_id?: string | null };
+type Category = { id: string; name: string; kind?: string; parent_id?: string | null };
 
 const money = (n: number) =>
   n.toLocaleString(undefined, { style: "currency", currency: "INR", maximumFractionDigits: 0 });
 
-type FilterKey = "all" | "review" | "approved" | "ai" | "existing" | "new" | "ignored";
+type FilterKey =
+  | "all"
+  | "review"
+  | "approved"
+  | "ai"
+  | "existing"
+  | "new"
+  | "ignored"
+  | "tier1"
+  | "tier2"
+  | "tier3";
 
 const FILTERS: Array<{ key: FilterKey; label: string }> = [
   { key: "all", label: "All" },
@@ -195,7 +205,9 @@ const ClusterPickPopover = memo(function ClusterPickPopover({
                 }}
               >
                 <span className="truncate">{c.name}</span>
-                <span className="text-[10px] text-muted-foreground shrink-0 ml-1">{clusterTxnCount(c)} txns</span>
+                <span className="text-[10px] text-muted-foreground shrink-0 ml-1">
+                  {clusterTxnCount(c)} txns
+                </span>
               </button>
             ))
           )}
@@ -229,7 +241,7 @@ const ClusterMergePopover = memo(function ClusterMergePopover({
       size="sm"
       className={cn(
         "gap-1 border-dashed",
-        isSmall ? "h-5 px-1.5 text-[10px] w-auto" : "h-7 px-2 text-xs w-auto"
+        isSmall ? "h-5 px-1.5 text-[10px] w-auto" : "h-7 px-2 text-xs w-auto",
       )}
       aria-label="Merge cluster"
       onClick={() => {
@@ -279,8 +291,12 @@ const ClusterMergePopover = memo(function ClusterMergePopover({
                   setOpen(false);
                 }}
               >
-                <span className="truncate">{memberDesc ? `Move to “${c.name}”` : `Merge into “${c.name}”`}</span>
-                <span className="text-[10px] text-muted-foreground shrink-0 ml-1">{clusterTxnCount(c)} txns</span>
+                <span className="truncate">
+                  {memberDesc ? `Move to “${c.name}”` : `Merge into “${c.name}”`}
+                </span>
+                <span className="text-[10px] text-muted-foreground shrink-0 ml-1">
+                  {clusterTxnCount(c)} txns
+                </span>
               </button>
             ))
           )}
@@ -547,6 +563,7 @@ export function ConfirmStep({
   aiRemaining,
   polishing,
   onPolish,
+  onCategorizeRemaining,
   onSavePayee,
   onCategoryCreated,
   onBack,
@@ -560,10 +577,11 @@ export function ConfirmStep({
   aiRemaining: number;
   polishing: boolean;
   onPolish: () => void;
+  onCategorizeRemaining: (clusters: Cluster[]) => Promise<Record<string, string | null>>;
   onSavePayee?: (cluster: Cluster) => void;
   onCategoryCreated?: (c: CategoryItem) => void;
   onBack: () => void;
-  onContinue: () => void;
+  onContinue: (clusters?: Cluster[]) => void;
 }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<FilterKey>("review");
@@ -575,10 +593,46 @@ export function ConfirmStep({
   const [splitPicked, setSplitPicked] = useState<string[]>([]);
   const [moveTargetId, setMoveTargetId] = useState<string>("");
   const [showHighConfModal, setShowHighConfModal] = useState(false);
+  const [categorizing, setCategorizing] = useState(false);
 
   const parentRef = useRef<HTMLDivElement>(null);
 
   const stats = useMemo(() => summarize(clusters), [clusters]);
+
+  const tierSummary = useMemo(() => {
+    const active = clusters.filter((cluster) => cluster.status !== "ignored");
+    const tiers = {
+      tier1: [] as Cluster[],
+      tier2: [] as Cluster[],
+      tier3: [] as Cluster[],
+    };
+    for (const cluster of active) tiers[getClusterTier(cluster)].push(cluster);
+    const summarizeTier = (items: Cluster[]) => ({
+      count: items.length,
+      transactions: items.reduce((total, cluster) => total + clusterTxnCount(cluster), 0),
+    });
+    return {
+      tier1: summarizeTier(tiers.tier1),
+      tier2: summarizeTier(tiers.tier2),
+      tier3: summarizeTier(tiers.tier3),
+      uncategorized: active.filter((cluster) => !cluster.category_id).length,
+    };
+  }, [clusters]);
+
+  const categorySummary = useMemo(() => {
+    const active = clusters.filter((cluster) => cluster.status !== "ignored");
+    const totalTransactions = active.reduce(
+      (total, cluster) => total + clusterTxnCount(cluster),
+      0,
+    );
+    return groupClustersByCategory(active, categories)
+      .filter((group) => group.categoryId)
+      .slice(0, 3)
+      .map((group) => ({
+        name: group.categoryName,
+        percent: totalTransactions ? Math.round((group.totalTxns / totalTransactions) * 100) : 0,
+      }));
+  }, [categories, clusters]);
 
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
 
@@ -604,6 +658,9 @@ export function ConfirmStep({
         if (filter === "existing" && !c.isExisting) return false;
         if (filter === "new" && c.isExisting) return false;
         if (filter === "ignored" && c.status !== "ignored") return false;
+        if (filter === "tier1" && getClusterTier(c) !== "tier1") return false;
+        if (filter === "tier2" && getClusterTier(c) !== "tier2") return false;
+        if (filter === "tier3" && getClusterTier(c) !== "tier3") return false;
         if (filter !== "ignored" && filter !== "approved" && c.status === "ignored") return false;
         if (!q) return true;
         return (
@@ -626,22 +683,31 @@ export function ConfirmStep({
     overscan: 6,
   });
 
-  const patch = useCallback((id: string, p: Partial<Cluster>) => {
-    setClusters(clusters.map((c) => (c.id === id ? { ...c, ...p } : c)));
-  }, [clusters, setClusters]);
+  const patch = useCallback(
+    (id: string, p: Partial<Cluster>) => {
+      setClusters(clusters.map((c) => (c.id === id ? { ...c, ...p } : c)));
+    },
+    [clusters, setClusters],
+  );
 
-  const bulk = useCallback((p: Partial<Cluster>) => {
-    const set = new Set(selectedIds);
-    setClusters(clusters.map((c) => (set.has(c.id) ? { ...c, ...p } : c)));
-  }, [clusters, selectedIds, setClusters]);
+  const bulk = useCallback(
+    (p: Partial<Cluster>) => {
+      const set = new Set(selectedIds);
+      setClusters(clusters.map((c) => (set.has(c.id) ? { ...c, ...p } : c)));
+    },
+    [clusters, selectedIds, setClusters],
+  );
 
-  const handleMergeWith = useCallback((sourceId: string, targetId: string, memberDesc?: string) => {
-    if (memberDesc) {
-      setClusters(moveMembers(clusters, sourceId, [memberDesc], targetId));
-    } else {
-      setClusters(mergeClusters(clusters, [sourceId, targetId]));
-    }
-  }, [clusters, setClusters]);
+  const handleMergeWith = useCallback(
+    (sourceId: string, targetId: string, memberDesc?: string) => {
+      if (memberDesc) {
+        setClusters(moveMembers(clusters, sourceId, [memberDesc], targetId));
+      } else {
+        setClusters(mergeClusters(clusters, [sourceId, targetId]));
+      }
+    },
+    [clusters, setClusters],
+  );
 
   const toggleSelect = useCallback((id: string) => {
     setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
@@ -651,6 +717,105 @@ export function ConfirmStep({
     setExpanded((p) => ({ ...p, [id]: !p[id] }));
   }, []);
 
+  const autoAssignByKeywords = useCallback(() => {
+    const categoryIndex = buildCategoryIndex(
+      categories.map((category) => ({
+        id: category.id,
+        name: category.name,
+        kind: category.kind ?? "expense",
+        parent_id: category.parent_id ?? null,
+      })),
+    );
+    let assigned = 0;
+    const next = clusters.map((cluster) => {
+      if (cluster.status === "ignored" || cluster.category_id) return cluster;
+      const categoryId = categorizeByKeywords(
+        cluster.patterns.join(" "),
+        cluster.members[0]?.description ?? cluster.name,
+        categoryIndex,
+      );
+      if (!categoryId) return cluster;
+      assigned++;
+      return {
+        ...cluster,
+        category_id: categoryId,
+        source: "rule" as const,
+        confidence: Math.max(cluster.confidence, 0.9),
+        status: "suggested" as const,
+      };
+    });
+    setClusters(next);
+    toast[assigned ? "success" : "info"](
+      assigned
+        ? `Assigned categories to ${assigned} clusters using keyword rules`
+        : "No additional keyword matches found",
+    );
+  }, [categories, clusters, setClusters]);
+
+  const askAiForRemaining = useCallback(async () => {
+    const unresolved = clusters.filter(
+      (cluster) => cluster.status !== "ignored" && !cluster.category_id,
+    );
+    if (!unresolved.length) {
+      toast.info("Every active cluster already has a category");
+      return;
+    }
+    setCategorizing(true);
+    try {
+      const assignments = await onCategorizeRemaining(unresolved);
+      let assigned = 0;
+      const next = clusters.map((cluster) => {
+        const categoryId = assignments[cluster.id];
+        if (!categoryId) return cluster;
+        assigned++;
+        return {
+          ...cluster,
+          category_id: categoryId,
+          source: "ai" as const,
+          confidence: Math.max(cluster.confidence, 0.75),
+          status: "suggested" as const,
+        };
+      });
+      setClusters(next);
+      toast[assigned ? "success" : "info"](
+        assigned
+          ? `AI assigned categories to ${assigned} clusters`
+          : "AI could not confidently assign the remaining clusters",
+      );
+    } catch (error: any) {
+      toast.error(error?.message ?? "AI categorization failed");
+    } finally {
+      setCategorizing(false);
+    }
+  }, [clusters, onCategorizeRemaining, setClusters]);
+
+  const useUncategorizedDefault = useCallback(() => {
+    const defaultCategory = categories.find((category) =>
+      ["uncategorized", "uncategorised", "other"].includes(category.name.trim().toLowerCase()),
+    );
+    const next = clusters.map((cluster) =>
+      cluster.status !== "ignored" && !cluster.category_id
+        ? { ...cluster, category_id: defaultCategory?.id ?? null, status: "approved" as const }
+        : cluster,
+    );
+    setClusters(next);
+    toast.success(
+      defaultCategory
+        ? `Assigned remaining clusters to ${defaultCategory.name}`
+        : "Approved the remaining clusters without a category",
+    );
+  }, [categories, clusters, setClusters]);
+
+  const approveAllAndContinue = useCallback(() => {
+    const next = clusters.map((cluster) =>
+      cluster.status === "ignored"
+        ? cluster
+        : { ...cluster, status: "approved" as const, pendingAi: false },
+    );
+    setClusters(next);
+    onContinue(next);
+  }, [clusters, onContinue, setClusters]);
+
   const splitTarget = clusters.find((c) => c.id === splitId) ?? null;
   const cohesion = useMemo(
     () => (splitTarget ? memberCohesion(splitTarget) : new Map<string, number>()),
@@ -659,6 +824,94 @@ export function ConfirmStep({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2.5">
+      {/* Summary-first view: high-confidence groups stay collapsed until requested. */}
+      <div className="rounded-xl border bg-card p-3 shadow-xs">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-sm font-semibold">Import summary</p>
+            <p className="text-[11px] text-muted-foreground">
+              Review exceptions first, or approve the categorized result in one click.
+            </p>
+          </div>
+          <Button size="sm" className="h-8 gap-1.5" onClick={approveAllAndContinue}>
+            <Check className="h-3.5 w-3.5" /> Approve all &amp; continue
+          </Button>
+        </div>
+        <div className="mt-3 grid gap-2 md:grid-cols-[minmax(0,1fr)_220px]">
+          <div className="grid gap-1.5 sm:grid-cols-3">
+            {[
+              {
+                key: "tier1" as const,
+                label: "Auto-matched",
+                summary: tierSummary.tier1,
+                tone: "text-emerald-700 dark:text-emerald-300",
+              },
+              {
+                key: "tier2" as const,
+                label: "AI / rule suggested",
+                summary: tierSummary.tier2,
+                tone: "text-ai",
+              },
+              {
+                key: "tier3" as const,
+                label: "Needs review",
+                summary: tierSummary.tier3,
+                tone: "text-warning",
+              },
+            ].map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                onClick={() => setFilter(item.key)}
+                className={cn(
+                  "rounded-lg border px-2.5 py-2 text-left transition-colors hover:bg-muted/50",
+                  filter === item.key && "border-primary/50 bg-primary/5",
+                )}
+              >
+                <p className={cn("text-xs font-semibold", item.tone)}>{item.label}</p>
+                <p className="mt-0.5 text-[11px] text-muted-foreground">
+                  {item.summary.count} payees · {item.summary.transactions.toLocaleString()} txns
+                </p>
+                <span className="mt-1 inline-block text-[10px] font-medium text-primary">
+                  Expand
+                </span>
+              </button>
+            ))}
+          </div>
+          <div className="space-y-1.5 rounded-lg border bg-muted/20 p-2.5">
+            <div className="flex items-center justify-between text-[11px]">
+              <span className="font-medium">Top categories</span>
+              <span
+                className={cn(
+                  "tabular-nums",
+                  tierSummary.uncategorized ? "text-warning" : "text-muted-foreground",
+                )}
+              >
+                {tierSummary.uncategorized} uncategorized
+              </span>
+            </div>
+            {categorySummary.length ? (
+              categorySummary.map((category) => (
+                <div key={category.name} className="space-y-0.5">
+                  <div className="flex justify-between text-[10px] text-muted-foreground">
+                    <span className="truncate">{category.name}</span>
+                    <span>{category.percent}%</span>
+                  </div>
+                  <div className="h-1 overflow-hidden rounded-full bg-muted">
+                    <div
+                      className="h-full rounded-full bg-primary/70"
+                      style={{ width: `${category.percent}%` }}
+                    />
+                  </div>
+                </div>
+              ))
+            ) : (
+              <p className="text-[10px] text-muted-foreground">No categories assigned yet.</p>
+            )}
+          </div>
+        </div>
+      </div>
+
       {/* 1-Click High Confidence Approval Banner */}
       {highConfUnapproved.length > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-2.5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3.5 py-2.5 shadow-xs">
@@ -668,7 +921,8 @@ export function ConfirmStep({
             </div>
             <div>
               <p className="text-xs font-semibold text-emerald-950 dark:text-emerald-100">
-                {highConfUnapproved.length} high-confidence payees recognized ({highConfUnapprovedTxns.toLocaleString()} transactions)
+                {highConfUnapproved.length} high-confidence payees recognized (
+                {highConfUnapprovedTxns.toLocaleString()} transactions)
               </p>
               <p className="text-[11px] text-emerald-800/80 dark:text-emerald-300/80">
                 Rules, memorized payees & high AI confidence matches ready for 1-click approval
@@ -714,22 +968,83 @@ export function ConfirmStep({
           active={filter === "approved"}
           onClick={() => setFilter("approved")}
         />
-        <StatTile label="New payees" value={stats.newPayees} active={filter === "new"} onClick={() => setFilter("new")} />
-        <StatTile label="Ignored" value={stats.ignored} active={filter === "ignored"} onClick={() => setFilter("ignored")} />
+        <StatTile
+          label="New payees"
+          value={stats.newPayees}
+          active={filter === "new"}
+          onClick={() => setFilter("new")}
+        />
+        <StatTile
+          label="Ignored"
+          value={stats.ignored}
+          active={filter === "ignored"}
+          onClick={() => setFilter("ignored")}
+        />
       </div>
 
       {aiRemaining > 0 && (
-        <div className="flex items-center gap-2 rounded-[10px] border border-ai/30 bg-ai/8 px-2.5 py-1.5 text-[11px]" role="status">
+        <div
+          className="flex items-center gap-2 rounded-[10px] border border-ai/30 bg-ai/8 px-2.5 py-1.5 text-[11px]"
+          role="status"
+        >
           <Loader2 className="h-3 w-3 animate-spin text-ai" aria-hidden />
-          Naming {aiRemaining.toLocaleString()} unresolved patterns in the background — you can
-          keep editing, names fill in live.
+          Naming {aiRemaining.toLocaleString()} unresolved patterns in the background — you can keep
+          editing, names fill in live.
+        </div>
+      )}
+
+      {tierSummary.uncategorized > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-[10px] border border-warning/30 bg-warning/5 px-2.5 py-2">
+          <div>
+            <p className="text-xs font-medium">
+              {tierSummary.uncategorized} clusters still need a category
+            </p>
+            <p className="text-[10px] text-muted-foreground">
+              Resolve only the exceptions before continuing.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs"
+              onClick={autoAssignByKeywords}
+            >
+              <Zap className="mr-1 h-3 w-3" /> Auto-assign by keywords
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs"
+              onClick={() => void askAiForRemaining()}
+              disabled={categorizing}
+            >
+              {categorizing ? (
+                <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+              ) : (
+                <Sparkles className="mr-1 h-3 w-3" />
+              )}
+              {categorizing ? "Asking AI…" : "Ask AI for remaining"}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 text-xs"
+              onClick={useUncategorizedDefault}
+            >
+              Use Uncategorized
+            </Button>
+          </div>
         </div>
       )}
 
       {/* Toolbar */}
       <div className="flex flex-wrap items-center gap-1.5">
         <div className="relative min-w-[180px] flex-1">
-          <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden />
+          <Search
+            className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
+            aria-hidden
+          />
           <Input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -744,7 +1059,9 @@ export function ConfirmStep({
             onClick={() => setViewMode("payee")}
             className={cn(
               "flex items-center gap-1 rounded-[7px] px-2 py-1 text-[11px] font-medium transition-colors",
-              viewMode === "payee" ? "bg-background shadow-xs" : "text-muted-foreground hover:text-foreground",
+              viewMode === "payee"
+                ? "bg-background shadow-xs"
+                : "text-muted-foreground hover:text-foreground",
             )}
           >
             <Grid className="h-3 w-3" /> By Payee ({visible.length})
@@ -754,7 +1071,9 @@ export function ConfirmStep({
             onClick={() => setViewMode("category")}
             className={cn(
               "flex items-center gap-1 rounded-[7px] px-2 py-1 text-[11px] font-medium transition-colors",
-              viewMode === "category" ? "bg-background shadow-xs" : "text-muted-foreground hover:text-foreground",
+              viewMode === "category"
+                ? "bg-background shadow-xs"
+                : "text-muted-foreground hover:text-foreground",
             )}
           >
             <Layers className="h-3 w-3" /> By Category ({categoryGroups.length})
@@ -768,7 +1087,9 @@ export function ConfirmStep({
               onClick={() => setFilter(f.key)}
               className={cn(
                 "rounded-[7px] px-2 py-1 text-[11px] font-medium transition-colors",
-                filter === f.key ? "bg-background shadow-xs" : "text-muted-foreground hover:text-foreground",
+                filter === f.key
+                  ? "bg-background shadow-xs"
+                  : "text-muted-foreground hover:text-foreground",
               )}
             >
               {f.label}
@@ -791,7 +1112,12 @@ export function ConfirmStep({
       {selectedIds.length > 0 && (
         <div className="flex flex-wrap items-center gap-1.5 rounded-[10px] border border-primary/40 bg-primary/5 px-2 py-1.5">
           <span className="text-[11px] font-medium">{selectedIds.length} selected</span>
-          <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => bulk({ status: "approved" })}>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-7 text-xs"
+            onClick={() => bulk({ status: "approved" })}
+          >
             <Check className="mr-1 h-3 w-3" aria-hidden /> Approve
           </Button>
           <Button
@@ -814,7 +1140,12 @@ export function ConfirmStep({
           >
             <Merge className="mr-1 h-3 w-3" aria-hidden /> Merge
           </Button>
-          <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => bulk({ status: "ignored" })}>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-7 text-xs"
+            onClick={() => bulk({ status: "ignored" })}
+          >
             <EyeOff className="mr-1 h-3 w-3" aria-hidden /> Ignore
           </Button>
           <div className="w-[180px]">
@@ -825,7 +1156,12 @@ export function ConfirmStep({
               onCategoryCreated={onCategoryCreated}
             />
           </div>
-          <Button size="sm" variant="ghost" className="ml-auto h-7 text-xs" onClick={() => setSelectedIds([])}>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="ml-auto h-7 text-xs"
+            onClick={() => setSelectedIds([])}
+          >
             Clear
           </Button>
         </div>
@@ -835,23 +1171,34 @@ export function ConfirmStep({
       {viewMode === "category" ? (
         <div className="min-h-[240px] flex-1 overflow-auto space-y-2 rounded-xl border bg-muted/15 p-2">
           {categoryGroups.map((group) => {
-            const isCatOpen = catExpanded[group.categoryName] ?? true;
+            const isCatOpen = catExpanded[group.categoryName] ?? !group.categoryId;
             return (
-              <div key={group.categoryName} className="rounded-xl border bg-card p-3 shadow-xs space-y-2">
+              <div
+                key={group.categoryName}
+                className="rounded-xl border bg-card p-3 shadow-xs space-y-2"
+              >
                 <div className="flex flex-wrap items-center justify-between gap-2 border-b pb-2">
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
-                      onClick={() => setCatExpanded((p) => ({ ...p, [group.categoryName]: !isCatOpen }))}
+                      onClick={() =>
+                        setCatExpanded((p) => ({ ...p, [group.categoryName]: !isCatOpen }))
+                      }
                       className="rounded p-0.5 text-muted-foreground hover:bg-muted"
                     >
-                      {isCatOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                      {isCatOpen ? (
+                        <ChevronDown className="h-4 w-4" />
+                      ) : (
+                        <ChevronRight className="h-4 w-4" />
+                      )}
                     </button>
                     <span className="font-semibold text-sm">{group.categoryName}</span>
                     <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
                       {group.clusters.length} payees · {group.totalTxns} txns
                     </span>
-                    <span className="text-xs tabular-nums text-muted-foreground">{money(group.totalAmount)}</span>
+                    <span className="text-xs tabular-nums text-muted-foreground">
+                      {money(group.totalAmount)}
+                    </span>
                   </div>
                   <Button
                     size="sm"
@@ -859,7 +1206,9 @@ export function ConfirmStep({
                     className="h-7 text-xs gap-1 border-emerald-500/40 hover:bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
                     onClick={() => {
                       const ids = new Set(group.clusters.map((c) => c.id));
-                      setClusters(clusters.map((c) => (ids.has(c.id) ? { ...c, status: "approved" } : c)));
+                      setClusters(
+                        clusters.map((c) => (ids.has(c.id) ? { ...c, status: "approved" } : c)),
+                      );
                     }}
                   >
                     <Check className="h-3 w-3" /> Approve Category ({group.clusters.length})
@@ -885,7 +1234,9 @@ export function ConfirmStep({
                           setSplitId(c.id);
                           setSplitPicked([]);
                         }}
-                        onMergeWith={(targetId, memberDesc) => handleMergeWith(c.id, targetId, memberDesc)}
+                        onMergeWith={(targetId, memberDesc) =>
+                          handleMergeWith(c.id, targetId, memberDesc)
+                        }
                         onSaveToBackend={onSavePayee}
                         onCategoryCreated={onCategoryCreated}
                       />
@@ -898,9 +1249,14 @@ export function ConfirmStep({
         </div>
       ) : (
         /* Virtualized payee list */
-        <div ref={parentRef} className="min-h-[240px] flex-1 overflow-auto rounded-xl border bg-muted/15 p-1.5 overscroll-contain">
+        <div
+          ref={parentRef}
+          className="min-h-[240px] flex-1 overflow-auto rounded-xl border bg-muted/15 p-1.5 overscroll-contain"
+        >
           {visible.length === 0 ? (
-            <p className="p-6 text-center text-xs text-muted-foreground">No clusters match this view.</p>
+            <p className="p-6 text-center text-xs text-muted-foreground">
+              No clusters match this view.
+            </p>
           ) : (
             <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
               {virtualizer.getVirtualItems().map((v) => {
@@ -935,7 +1291,9 @@ export function ConfirmStep({
                         setSplitId(c.id);
                         setSplitPicked([]);
                       }}
-                      onMergeWith={(targetId, memberDesc) => handleMergeWith(c.id, targetId, memberDesc)}
+                      onMergeWith={(targetId, memberDesc) =>
+                        handleMergeWith(c.id, targetId, memberDesc)
+                      }
                       onSaveToBackend={onSavePayee}
                       onCategoryCreated={onCategoryCreated}
                     />
@@ -957,8 +1315,11 @@ export function ConfirmStep({
               ? `${stats.needsReview} cluster${stats.needsReview === 1 ? "" : "s"} still need review`
               : "All clusters resolved"}
           </span>
-          <Button size="sm" onClick={onContinue}>
+          <Button size="sm" onClick={() => onContinue()}>
             Review transactions
+          </Button>
+          <Button size="sm" variant="secondary" onClick={approveAllAndContinue}>
+            Approve all &amp; continue
           </Button>
         </div>
       </div>
@@ -969,9 +1330,9 @@ export function ConfirmStep({
           <SheetHeader>
             <SheetTitle className="text-sm">Reassign from “{splitTarget?.name}”</SheetTitle>
             <SheetDescription className="text-xs">
-              Pick the raw descriptions that were grouped wrongly, then split them into a new payee or
-              move them into an existing payee group. Similarity shows how close each description is to
-              the group representative.
+              Pick the raw descriptions that were grouped wrongly, then split them into a new payee
+              or move them into an existing payee group. Similarity shows how close each description
+              is to the group representative.
             </SheetDescription>
           </SheetHeader>
           <div className="min-h-0 flex-1 space-y-px overflow-auto rounded-[10px] border p-1">
@@ -1012,7 +1373,9 @@ export function ConfirmStep({
             })}
           </div>
           <div className="space-y-2 rounded-[10px] border bg-muted/30 p-2">
-            <p className="text-[11px] font-medium">Move the picked descriptions into another payee</p>
+            <p className="text-[11px] font-medium">
+              Move the picked descriptions into another payee
+            </p>
             <div className="flex items-center gap-2">
               <div className="min-w-0 flex-1">
                 <Select value={moveTargetId} onValueChange={setMoveTargetId}>
@@ -1125,15 +1488,112 @@ function HighConfApprovalModal({
   const getAutoCategory = useCallback(
     (c: Cluster): string | null => {
       if (c.category_id) return c.category_id;
-      const text = `${c.name} ${c.patterns.join(" ")} ${c.members.map((m) => m.description).join(" ")}`.toLowerCase();
+      const text =
+        `${c.name} ${c.patterns.join(" ")} ${c.members.map((m) => m.description).join(" ")}`.toLowerCase();
 
       const rules: Array<[string[], string]> = [
-        [["swiggy", "zomato", "blinkit", "zepto", "instamart", "mcdonald", "dominos", "kfc", "starbucks", "bakery", "cafe", "restaurant", "dining", "food"], "Food & Dining"],
+        [
+          [
+            "swiggy",
+            "zomato",
+            "blinkit",
+            "zepto",
+            "instamart",
+            "mcdonald",
+            "dominos",
+            "kfc",
+            "starbucks",
+            "bakery",
+            "cafe",
+            "restaurant",
+            "dining",
+            "food",
+          ],
+          "Food & Dining",
+        ],
         [["grocery", "supermarket", "mart", "more retail", "nature basket"], "Groceries"],
-        [["uber", "ola", "rapido", "namma", "petrol", "hpcl", "bpcl", "iocl", "fuel", "shell", "parking", "metro", "irctc", "redbus", "indigo", "akasa", "airindia", "flight", "toll", "fastag"], "Transport"],
-        [["amazon", "flipkart", "myntra", "ajio", "meesho", "decathlon", "zara", "h&m", "retail", "shopping"], "Shopping"],
-        [["airtel", "jio", "vi ", "vodafone", "bescom", "tseb", "msedcl", "electricity", "water", "gas", "broadband", "netflix", "spotify", "youtube", "prime", "hotstar", "apple", "google"], "Bills & Utilities"],
-        [["zerodha", "groww", "coin", "angelone", "upstox", "indmoney", "mutual fund", "sip", "ppf", "nps", "lic", "hdfc life", "icici pru", "sbi life"], "Investments"],
+        [
+          [
+            "uber",
+            "ola",
+            "rapido",
+            "namma",
+            "petrol",
+            "hpcl",
+            "bpcl",
+            "iocl",
+            "fuel",
+            "shell",
+            "parking",
+            "metro",
+            "irctc",
+            "redbus",
+            "indigo",
+            "akasa",
+            "airindia",
+            "flight",
+            "toll",
+            "fastag",
+          ],
+          "Transport",
+        ],
+        [
+          [
+            "amazon",
+            "flipkart",
+            "myntra",
+            "ajio",
+            "meesho",
+            "decathlon",
+            "zara",
+            "h&m",
+            "retail",
+            "shopping",
+          ],
+          "Shopping",
+        ],
+        [
+          [
+            "airtel",
+            "jio",
+            "vi ",
+            "vodafone",
+            "bescom",
+            "tseb",
+            "msedcl",
+            "electricity",
+            "water",
+            "gas",
+            "broadband",
+            "netflix",
+            "spotify",
+            "youtube",
+            "prime",
+            "hotstar",
+            "apple",
+            "google",
+          ],
+          "Bills & Utilities",
+        ],
+        [
+          [
+            "zerodha",
+            "groww",
+            "coin",
+            "angelone",
+            "upstox",
+            "indmoney",
+            "mutual fund",
+            "sip",
+            "ppf",
+            "nps",
+            "lic",
+            "hdfc life",
+            "icici pru",
+            "sbi life",
+          ],
+          "Investments",
+        ],
         [["rent", "society", "maintenance"], "Housing"],
         [["salary", "payroll"], "Salary & Income"],
       ];
@@ -1212,13 +1672,17 @@ function HighConfApprovalModal({
           {/* Summary Strip */}
           <div className="grid grid-cols-3 gap-2 rounded-xl border bg-emerald-500/10 border-emerald-500/30 p-3 text-center">
             <div>
-              <p className="text-[10px] uppercase font-medium text-muted-foreground">Payees Selected</p>
+              <p className="text-[10px] uppercase font-medium text-muted-foreground">
+                Payees Selected
+              </p>
               <p className="text-base font-bold text-emerald-950 dark:text-emerald-100">
                 {selectedClusters.length} / {clustersToApprove.length}
               </p>
             </div>
             <div>
-              <p className="text-[10px] uppercase font-medium text-muted-foreground">Transactions</p>
+              <p className="text-[10px] uppercase font-medium text-muted-foreground">
+                Transactions
+              </p>
               <p className="text-base font-bold text-emerald-950 dark:text-emerald-100">
                 {totalTxns.toLocaleString()}
               </p>
@@ -1232,7 +1696,8 @@ function HighConfApprovalModal({
           </div>
 
           <p className="text-muted-foreground text-[11px]">
-            Review payees and assigned categories below. You can change categories or uncheck any payee before approving:
+            Review payees and assigned categories below. You can change categories or uncheck any
+            payee before approving:
           </p>
 
           {/* Scrollable Payee List */}
@@ -1248,7 +1713,9 @@ function HighConfApprovalModal({
                   key={c.id}
                   className={cn(
                     "flex flex-wrap items-center justify-between gap-3 rounded-lg border p-2.5 transition-colors",
-                    isChecked ? "bg-background border-emerald-500/30 shadow-xs" : "bg-muted/40 opacity-60 border-border",
+                    isChecked
+                      ? "bg-background border-emerald-500/30 shadow-xs"
+                      : "bg-muted/40 opacity-60 border-border",
                   )}
                 >
                   <div className="flex items-center gap-2.5 min-w-[240px] flex-1">

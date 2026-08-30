@@ -38,7 +38,12 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { listAccounts } from "@/lib/finance.functions";
-import { polishPayeeNames, bulkInsertTransactions, inspectStatementWithAI } from "@/lib/statement-import.functions";
+import {
+  polishPayeeNames,
+  categorizePayeeClusters,
+  bulkInsertTransactions,
+  inspectStatementWithAI,
+} from "@/lib/statement-import.functions";
 import { quickSavePayee } from "@/lib/memorized-payees.functions";
 import { startStatementUpload, saveMerchantCorrections } from "@/lib/statement-pipeline.functions";
 import { cancelStatementUpload } from "@/lib/statement-archive.functions";
@@ -53,12 +58,16 @@ import type { StatementDetection } from "@/lib/statement-detect";
 import {
   buildClusters,
   clusterTxnCount,
+  computeReadiness,
   mergeClusters,
   summarize,
   type Cluster,
   type ClusterTxn,
+  type ReadinessResult,
   type ResolvedEntry,
 } from "@/lib/statement-clusters";
+import { buildCategoryIndex, resolveCategoryId } from "@/lib/category-resolver";
+import { getImportSettings } from "@/lib/pattern-categories.functions";
 import { ImportStep } from "./statement-import/import-step";
 import {
   ProcessingTimeline,
@@ -88,7 +97,6 @@ const STEPS: Array<{ key: Step; label: string; Icon: typeof FileSearch }> = [
   { key: "confirm", label: "Confirm payees", Icon: ListChecks },
   { key: "review", label: "Review", Icon: Table2 },
 ];
-
 
 function readFileAsBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -154,7 +162,12 @@ function ActivityBanner({ activity, onDismiss }: { activity: Activity; onDismiss
         {activity.detail && <p className="mt-0.5 break-words opacity-80">{activity.detail}</p>}
       </div>
       {onDismiss && activity.kind !== "busy" && (
-        <button type="button" onClick={onDismiss} aria-label="Dismiss" className="opacity-60 hover:opacity-100">
+        <button
+          type="button"
+          onClick={onDismiss}
+          aria-label="Dismiss"
+          className="opacity-60 hover:opacity-100"
+        >
           <X className="h-3.5 w-3.5" aria-hidden />
         </button>
       )}
@@ -167,6 +180,8 @@ export function StatementImportDialog() {
   const correctionsFn = useServerFn(saveMerchantCorrections);
   const saveFn = useServerFn(bulkInsertTransactions);
   const polishFn = useServerFn(polishPayeeNames);
+  const categorizeClustersFn = useServerFn(categorizePayeeClusters);
+  const getImportSettingsFn = useServerFn(getImportSettings);
   const inspectAiFn = useServerFn(inspectStatementWithAI);
   const cancelFn = useServerFn(cancelStatementUpload);
   const explainDupFn = useServerFn(explainImportDuplicates);
@@ -198,9 +213,14 @@ export function StatementImportDialog() {
   const [preview, setPreview] = useState<ReviewRow[] | null>(null);
   const [dupScanning, setDupScanning] = useState(false);
   const [lastBatch, setLastBatch] = useState<{ batchId: string; count: number } | null>(null);
+  const [readiness, setReadiness] = useState<ReadinessResult | null>(null);
 
-  const [stageStates, setStageStates] = useState<Record<StageKey, Stage>>(() =>
-    Object.fromEntries(STAGE_ORDER.map((k) => [k, { key: k, state: "pending" }])) as Record<StageKey, Stage>,
+  const [stageStates, setStageStates] = useState<Record<StageKey, Stage>>(
+    () =>
+      Object.fromEntries(STAGE_ORDER.map((k) => [k, { key: k, state: "pending" }])) as Record<
+        StageKey,
+        Stage
+      >,
   );
   const [stats, setStats] = useState<ProcessingStats>(emptyStats);
   const [operation, setOperation] = useState("Waiting for a file");
@@ -223,15 +243,17 @@ export function StatementImportDialog() {
     [cancelFn],
   );
 
-
-
-
   const classification = useStatementClassification(uploadId);
 
   const categoryIdByName = useMemo(() => {
     const m = new Map<string, string>();
     for (const c of categories) m.set(c.name.toLowerCase(), c.id);
     return m;
+  }, [categories]);
+
+  const categoryIndex = useMemo(() => {
+    if (!categories.length) return null;
+    return buildCategoryIndex(categories);
   }, [categories]);
 
   // elapsed timer while parsing
@@ -253,6 +275,13 @@ export function StatementImportDialog() {
         if (!c.pendingAi) return c;
         const hit = c.patterns.map((p) => resolved[p]).find(Boolean);
         if (!hit) return c;
+        // Use fuzzy resolver when categoryIndex is available
+        let resolvedCatId = c.category_id;
+        if (!resolvedCatId && hit.category) {
+          resolvedCatId = categoryIndex
+            ? resolveCategoryId(hit.category, categoryIndex)
+            : (categoryIdByName.get(hit.category.toLowerCase()) ?? null);
+        }
         return {
           ...c,
           name: hit.payee,
@@ -261,9 +290,7 @@ export function StatementImportDialog() {
           source: "ai",
           confidence: Math.max(c.confidence, 0.72),
           status: c.status === "review" ? "suggested" : c.status,
-          category_id:
-            c.category_id ??
-            (hit.category ? categoryIdByName.get(hit.category.toLowerCase()) ?? null : null),
+          category_id: resolvedCatId,
         };
       }),
     );
@@ -294,17 +321,23 @@ export function StatementImportDialog() {
     pendingCorrections.current = [];
 
     setStageStates(
-      Object.fromEntries(STAGE_ORDER.map((k) => [k, { key: k, state: "pending" }])) as Record<StageKey, Stage>,
+      Object.fromEntries(STAGE_ORDER.map((k) => [k, { key: k, state: "pending" }])) as Record<
+        StageKey,
+        Stage
+      >,
     );
   };
-
 
   const onParse = async () => {
     if (!accountId || !bank || !file) return;
     const controller = new AbortController();
     abortRef.current = controller;
     setParsing(true);
-    setActivity({ kind: "busy", label: `Parsing ${file.name}`, detail: "No data is saved during this step." });
+    setActivity({
+      kind: "busy",
+      label: `Parsing ${file.name}`,
+      detail: "No data is saved during this step.",
+    });
     setStep("parsing");
     startedAt.current = Date.now();
     setElapsed(0);
@@ -371,7 +404,11 @@ export function StatementImportDialog() {
       await sleep(150);
       if (controller.signal.aborted) return;
       const tCols = Date.now() - t3;
-      setStage("columns", { state: "done", ms: tCols, detail: "Date, Description, Amount, Type mapped" });
+      setStage("columns", {
+        state: "done",
+        ms: tCols,
+        detail: "Date, Description, Amount, Type mapped",
+      });
       await sleep(120);
 
       // ------------------------------------------------------------- 5. Parsing transactions
@@ -400,7 +437,11 @@ export function StatementImportDialog() {
 
       const tParse = Date.now() - t4;
       const txnsCount = res.transactions.length;
-      setStage("parse", { state: "done", ms: tParse, detail: `${txnsCount.toLocaleString()} transactions parsed` });
+      setStage("parse", {
+        state: "done",
+        ms: tParse,
+        detail: `${txnsCount.toLocaleString()} transactions parsed`,
+      });
       setStage("rows", {
         state: "done",
         ms: tRows,
@@ -465,9 +506,12 @@ export function StatementImportDialog() {
         resolved,
         existingPayees: res.existingPayees,
         categoryIdByName,
+        categoryIndex: categoryIndex ?? undefined,
       });
 
-      const matchedPayees = built.filter((c) => c.source === "payee" || c.source === "alias").length;
+      const matchedPayees = built.filter(
+        (c) => c.source === "payee" || c.source === "alias",
+      ).length;
       const tPayees = Date.now() - t7;
       setStage("payees", { state: "done", ms: tPayees, detail: `${matchedPayees} payees matched` });
       await sleep(120);
@@ -492,7 +536,11 @@ export function StatementImportDialog() {
       if (controller.signal.aborted) return;
 
       const tCluster = Date.now() - t9;
-      setStage("cluster", { state: "done", ms: tCluster, detail: `${built.length} payee clusters` });
+      setStage("cluster", {
+        state: "done",
+        ms: tCluster,
+        detail: `${built.length} payee clusters`,
+      });
       await sleep(120);
 
       // ------------------------------------------------------------- 11. AI naming unresolved clusters
@@ -545,6 +593,37 @@ export function StatementImportDialog() {
       await sleep(500);
 
       setStep("confirm");
+
+      // ---- Auto-pilot gate ----
+      const rd = computeReadiness(built);
+      setReadiness(rd);
+
+      // Fetch user's auto-approve threshold
+      let threshold = 0.8;
+      try {
+        const settings = await getImportSettingsFn();
+        threshold = settings.autoApproveThreshold;
+      } catch {
+        // Use default
+      }
+
+      if (rd.score >= threshold) {
+        // Auto-pilot: skip confirm step, auto-approve all T1+T2
+        toast.success(
+          `Auto-approved ${rd.autoCount + rd.suggestedCount} payees (${Math.round(rd.score * 100)}% confidence). Review below.`,
+          { duration: 5000 },
+        );
+        // Jump directly to accept (which transitions to review step)
+        const autoClusters = built.map((c) => {
+          if (c.status === "review" && c.category_id) {
+            return { ...c, status: "suggested" as const };
+          }
+          return c;
+        });
+        setClusters(autoClusters);
+        await onConfirmPayees(autoClusters);
+      }
+
       setActivity({
         kind: "ok",
         label: `Parsed ${txns.length.toLocaleString()} transactions — nothing saved yet`,
@@ -558,14 +637,19 @@ export function StatementImportDialog() {
         `${txns.length.toLocaleString()} transactions · ${built.length} payee clusters` +
           (pending ? ` · naming ${pending} in the background` : " · all recognised"),
       );
-      notify("parsed", true, `Statement parsed — ${txns.length.toLocaleString()} transactions ready to review`, [
-        `File: ${file?.name ?? "statement"}`,
-        `Payee clusters: ${built.length}`,
-        (res as any).archived
-          ? "The original file was archived privately."
-          : "The original file was not archived (archiving is off).",
-        "Nothing has been saved yet — review and import in the app.",
-      ]);
+      notify(
+        "parsed",
+        true,
+        `Statement parsed — ${txns.length.toLocaleString()} transactions ready to review`,
+        [
+          `File: ${file?.name ?? "statement"}`,
+          `Payee clusters: ${built.length}`,
+          (res as any).archived
+            ? "The original file was archived privately."
+            : "The original file was not archived (archiving is off).",
+          "Nothing has been saved yet — review and import in the app.",
+        ],
+      );
     } catch (e: any) {
       if (controller.signal.aborted) {
         setOperation("Cancelled");
@@ -600,7 +684,6 @@ export function StatementImportDialog() {
     setStep("import");
   };
 
-
   const onPolish = async () => {
     const targets = clusters.filter((c) => c.status !== "ignored" && !c.isExisting);
     if (!targets.length) return toast.info("Nothing to polish");
@@ -619,7 +702,9 @@ export function StatementImportDialog() {
       let next = clusters.map((c) => {
         const i = targets.indexOf(c);
         const rename = i >= 0 ? renames[String(i)] : undefined;
-        return rename ? { ...c, name: rename, source: "ai" as const, status: "suggested" as const } : c;
+        return rename
+          ? { ...c, name: rename, source: "ai" as const, status: "suggested" as const }
+          : c;
       });
       const merges: number[][] = Array.isArray(res?.merges) ? res.merges : [];
       for (const group of merges) {
@@ -635,9 +720,33 @@ export function StatementImportDialog() {
     }
   };
 
-  const onConfirmPayees = async () => {
+  const onCategorizeRemaining = async (
+    targets: Cluster[],
+  ): Promise<Record<string, string | null>> => {
+    if (!targets.length || !categories.length) return {};
+    const result: any = await categorizeClustersFn({
+      data: {
+        clusters: targets.map((cluster) => ({
+          name: cluster.name,
+          sample: cluster.members[0]?.description.slice(0, 240) ?? "",
+        })),
+        categoryNames: categories.map((category) => category.name),
+      },
+    });
+    const categoryIndex = buildCategoryIndex(categories);
+    const assignments: Record<string, string | null> = {};
+    for (const [rawIndex, categoryName] of Object.entries(result?.categories ?? {})) {
+      const index = Number(rawIndex);
+      const cluster = targets[index];
+      if (!cluster) continue;
+      assignments[cluster.id] = resolveCategoryId(String(categoryName), categoryIndex);
+    }
+    return assignments;
+  };
+
+  async function onConfirmPayees(sourceClusters: Cluster[] = clusters) {
     const byDesc = new Map<string, Cluster>();
-    for (const c of clusters) for (const m of c.members) byDesc.set(m.description, c);
+    for (const c of sourceClusters) for (const m of c.members) byDesc.set(m.description, c);
 
     const next: ReviewRow[] = rawTxns.map((t) => {
       const c = byDesc.get(t.description);
@@ -680,7 +789,7 @@ export function StatementImportDialog() {
     }
 
     // Teach the system only once the import is actually saved (see onSave).
-    pendingCorrections.current = clusters
+    pendingCorrections.current = sourceClusters
       .filter((c) => !c.pendingAi && c.status !== "ignored" && c.name.trim())
       .flatMap((c) =>
         c.patterns.map((p) => ({
@@ -693,7 +802,7 @@ export function StatementImportDialog() {
     const enriched = await explainAccountDuplicates(next);
     setRows(enriched);
     setStep("review");
-  };
+  }
 
   /**
    * Duplicate hint 2 — the row already exists on the account. The server
@@ -752,15 +861,20 @@ export function StatementImportDialog() {
     }
   };
 
-
   const categoryName = useCallback(
-    (id: string | null) => (id ? categories.find((c) => c.id === id)?.name ?? "—" : "Uncategorized"),
+    (id: string | null) =>
+      id ? (categories.find((c) => c.id === id)?.name ?? "—") : "Uncategorized",
     [categories],
   );
 
   /** Fire-and-forget notification: in-app toast is primary, email is optional. */
   const notify = useCallback(
-    (event: "parsed" | "imported" | "rolled_back" | "failed", ok: boolean, title: string, lines: string[]) => {
+    (
+      event: "parsed" | "imported" | "rolled_back" | "failed",
+      ok: boolean,
+      title: string,
+      lines: string[],
+    ) => {
       void notifyFn({ data: { event, ok, title, lines } })
         .then((r: any) => {
           if (r?.sent) toast.message("Notification email sent", { description: title });
@@ -771,12 +885,16 @@ export function StatementImportDialog() {
   );
 
   const exportMeta = (kind: "preview" | "imported", rowsForRange: ReviewRow[]) => {
-    const dates = rowsForRange.map((r) => r.date).filter(Boolean).sort();
+    const dates = rowsForRange
+      .map((r) => r.date)
+      .filter(Boolean)
+      .sort();
     return {
       kind,
       fileName: file?.name ?? "statement",
       account:
-        (accounts as Array<{ id: string; name: string }>).find((a) => a.id === accountId)?.name ?? "—",
+        (accounts as Array<{ id: string; name: string }>).find((a) => a.id === accountId)?.name ??
+        "—",
       bank: bank || "—",
       from: dates[0] ?? "—",
       to: dates[dates.length - 1] ?? "—",
@@ -813,7 +931,9 @@ export function StatementImportDialog() {
       const res: any = await undoFn({ data: { batchId } });
       qc.invalidateQueries();
       setLastBatch(null);
-      toast.success(`Rolled back ${Number(res?.deleted ?? 0).toLocaleString()} imported transactions`);
+      toast.success(
+        `Rolled back ${Number(res?.deleted ?? 0).toLocaleString()} imported transactions`,
+      );
       notify("rolled_back", true, "Statement import rolled back", [
         `${Number(res?.deleted ?? 0).toLocaleString()} transactions were removed.`,
         `Account balances were recalculated.`,
@@ -931,7 +1051,9 @@ export function StatementImportDialog() {
           label: "Learning payee names",
           detail: `${corrections.length.toLocaleString()} confirmed names are being saved to your payee dictionary.`,
         });
-        void correctionsFn({ data: { corrections: corrections.slice(0, 2000) } }).catch(() => undefined);
+        void correctionsFn({ data: { corrections: corrections.slice(0, 2000) } }).catch(
+          () => undefined,
+        );
       }
       const batchId = (res?.batchId as string) ?? importToken ?? null;
       const snapshot = toSave;
@@ -983,7 +1105,6 @@ export function StatementImportDialog() {
       setSaving(false);
     }
   };
-
 
   const clusterStats = useMemo(() => summarize(clusters), [clusters]);
   const quickSaveFn = useServerFn(quickSavePayee);
@@ -1053,11 +1174,14 @@ export function StatementImportDialog() {
             <Stepper step={step} />
           </div>
           <DialogDescription className="text-xs">
-            {step === "import" && "Pick an account, drop a statement — we detect the bank, period and format before parsing."}
-            {step === "parsing" && "Parsing, deduplicating and matching merchants. Naming continues in the background."}
+            {step === "import" &&
+              "Pick an account, drop a statement — we detect the bank, period and format before parsing."}
+            {step === "parsing" &&
+              "Parsing, deduplicating and matching merchants. Naming continues in the background."}
             {step === "confirm" &&
               `${clusterStats.clusters} payee clusters from ${clusterStats.transactions.toLocaleString()} transactions. Rename, merge, split or ignore before importing.`}
-            {step === "review" && "Final pass — exclude rows, fix payees and categories, then import."}
+            {step === "review" &&
+              "Final pass — exclude rows, fix payees and categories, then import."}
           </DialogDescription>
         </DialogHeader>
 
@@ -1081,7 +1205,14 @@ export function StatementImportDialog() {
               onFile={async (f, d) => {
                 setFile(f);
                 setDetection(d);
-                if (f && d && (d.format === "pdf" || d.format === "csv" || d.format === "xlsx" || d.format === "xls")) {
+                if (
+                  f &&
+                  d &&
+                  (d.format === "pdf" ||
+                    d.format === "csv" ||
+                    d.format === "xlsx" ||
+                    d.format === "xls")
+                ) {
                   void (async () => {
                     try {
                       const sampleText = await f.slice(0, 8000).text();
@@ -1161,10 +1292,11 @@ export function StatementImportDialog() {
               aiRemaining={aiRemaining}
               polishing={polishing}
               onPolish={onPolish}
+              onCategorizeRemaining={onCategorizeRemaining}
               onSavePayee={(cl) => void handleSavePayeeToBackend(cl)}
               onCategoryCreated={(newCat) => setCategories((prev) => [...prev, newCat as Category])}
               onBack={() => setStep("import")}
-              onContinue={() => void onConfirmPayees()}
+              onContinue={(next) => void onConfirmPayees(next)}
             />
           )}
 
@@ -1197,8 +1329,13 @@ export function StatementImportDialog() {
                 ["Uncategorised", previewSummary.uncategorized.toLocaleString()],
                 ["Date range", `${previewSummary.from} → ${previewSummary.to}`],
               ].map(([label, value]) => (
-                <div key={label as string} className="rounded-[10px] border border-border px-2.5 py-1.5">
-                  <dt className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</dt>
+                <div
+                  key={label as string}
+                  className="rounded-[10px] border border-border px-2.5 py-1.5"
+                >
+                  <dt className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                    {label}
+                  </dt>
                   <dd className="font-medium tabular-nums">{value}</dd>
                 </div>
               ))}
@@ -1207,8 +1344,10 @@ export function StatementImportDialog() {
               <div className="space-y-1.5 rounded-[10px] border border-border bg-muted/40 p-2.5">
                 <p className="flex items-center gap-1.5 text-[11px] font-medium">
                   <ShieldQuestion className="h-3.5 w-3.5 shrink-0" aria-hidden />
-                  Why {(previewSummary.dupOnAccount + previewSummary.dupInFile).toLocaleString()} rows are flagged as
-                  duplicates
+                  Why {(
+                    previewSummary.dupOnAccount + previewSummary.dupInFile
+                  ).toLocaleString()}{" "}
+                  rows are flagged as duplicates
                   {dupScanning && <span className="text-muted-foreground">· checking…</span>}
                 </p>
                 <p className="text-[11px] text-muted-foreground">
@@ -1218,11 +1357,15 @@ export function StatementImportDialog() {
                 </p>
                 <ul className="max-h-40 space-y-1 overflow-y-auto">
                   {previewSummary.dupSamples.map((r) => (
-                    <li key={r.key} className="rounded-[8px] border border-border bg-background px-2 py-1 text-[11px]">
+                    <li
+                      key={r.key}
+                      className="rounded-[8px] border border-border bg-background px-2 py-1 text-[11px]"
+                    >
                       <div className="flex items-center justify-between gap-2">
                         <span className="truncate font-medium">{r.payee || r.description}</span>
                         <span className="shrink-0 tabular-nums text-muted-foreground">
-                          {r.date} · {r.amount.toFixed(2)} · {Math.round((r.dup?.confidence ?? 0) * 100)}% match
+                          {r.date} · {r.amount.toFixed(2)} ·{" "}
+                          {Math.round((r.dup?.confidence ?? 0) * 100)}% match
                         </span>
                       </div>
                       <p className="text-muted-foreground">
@@ -1231,7 +1374,8 @@ export function StatementImportDialog() {
                       </p>
                       {r.dup?.existing && (
                         <p className="text-muted-foreground">
-                          Existing: {r.dup.existing.date} · {Number(r.dup.existing.amount).toFixed(2)} ·{" "}
+                          Existing: {r.dup.existing.date} ·{" "}
+                          {Number(r.dup.existing.amount).toFixed(2)} ·{" "}
                           {r.dup.existing.merchant || r.dup.existing.note || "—"}
                         </p>
                       )}
@@ -1241,10 +1385,18 @@ export function StatementImportDialog() {
               </div>
             )}
             <div className="flex flex-wrap gap-2">
-              <Button variant="outline" size="sm" onClick={() => doExport("csv", "preview", preview ?? [])}>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => doExport("csv", "preview", preview ?? [])}
+              >
                 <Download className="mr-1.5 h-3.5 w-3.5" aria-hidden /> Export preview CSV
               </Button>
-              <Button variant="outline" size="sm" onClick={() => doExport("pdf", "preview", preview ?? [])}>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => doExport("pdf", "preview", preview ?? [])}
+              >
                 <FileText className="mr-1.5 h-3.5 w-3.5" aria-hidden /> Export preview PDF
               </Button>
             </div>
@@ -1266,4 +1418,3 @@ export function StatementImportDialog() {
     </Dialog>
   );
 }
-

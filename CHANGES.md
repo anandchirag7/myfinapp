@@ -2,6 +2,33 @@
 
 This file tracks all modified and newly created files along with their date of change.
 
+## 2026-08-30
+- Implemented the approved 98-row global category template, safe existing-household backfill, stable category keys, 319 seed merchant remaps, 6 unsafe seed removals, and 189 new global patterns.
+- Aligned import classification categories and deterministic keyword rules with the compact taxonomy while preserving legacy aliases.
+- `CATEGORY_RECONCILIATION_REVIEW_PLAN.md`
+- `EXISTING_MERCHANT_REMAP.md`
+- `NEW_PATTERN_PROPOSALS.md`
+- `supabase/migrations/20260830000000_default_category_taxonomy.sql`
+- `src/lib/default-category-templates.ts`
+- `src/lib/statement-normalize.ts`
+- `src/lib/category-resolver.ts`
+- `src/integrations/supabase/types.ts`
+- `src/tests/statement-normalize.test.ts`
+- `CHANGES.md`
+
+## 2026-08-29
+- Completed the Phase 1 statement-import auto-categorization flow with a summary-first exception review, keyword and AI bulk category assignment, one-click approval, a working auto-pilot transition, and a configurable per-user approval threshold.
+- Added review documents for the proposed default category taxonomy, existing merchant remaps, and new merchant-pattern candidates.
+- `CATEGORY_RECONCILIATION_REVIEW_PLAN.md`
+- `EXISTING_MERCHANT_REMAP.md`
+- `NEW_PATTERN_PROPOSALS.md`
+- `src/components/statement-import/confirm-step.tsx`
+- `src/components/statement-import-dialog.tsx`
+- `src/lib/statement-import.functions.ts`
+- `src/lib/profile.functions.ts`
+- `src/routes/_authenticated/settings.tsx`
+- `CHANGES.md`
+
 ## 2026-08-05
 - `.env`
 - `package.json`

@@ -9,62 +9,187 @@ import {
   type ExtractedTxn,
 } from "./statement-parse.server";
 
-
 // ---------- Fast local payee clustering ----------
 
 /** Aggressively normalize a raw description so near-duplicates collapse before we call the LLM. */
 function normalizeDescForCluster(s: string): string {
-  return s
-    .toUpperCase()
-    // strip long digit runs (txn ids, card tails, ref numbers)
-    .replace(/\b\d{4,}\b/g, " ")
-    // strip dates
-    .replace(/\b\d{1,2}[\/\-][A-Z0-9]{2,}[\/\-]?\d{0,4}\b/g, " ")
-    // strip common noise tokens
-    .replace(/\b(UPI|NEFT|IMPS|RTGS|POS|ATM|TXN|REF|TRF|PAYMENT|PMT|PUR|DEBIT|CREDIT|INR|RS)\b/g, " ")
-    .replace(/[^A-Z0-9&@ ]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 80);
+  return (
+    s
+      .toUpperCase()
+      // strip long digit runs (txn ids, card tails, ref numbers)
+      .replace(/\b\d{4,}\b/g, " ")
+      // strip dates
+      .replace(/\b\d{1,2}[\/\-][A-Z0-9]{2,}[\/\-]?\d{0,4}\b/g, " ")
+      // strip common noise tokens
+      .replace(
+        /\b(UPI|NEFT|IMPS|RTGS|POS|ATM|TXN|REF|TRF|PAYMENT|PMT|PUR|DEBIT|CREDIT|INR|RS)\b/g,
+        " ",
+      )
+      .replace(/[^A-Z0-9&@ ]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 80)
+  );
 }
 
 const PAYMENT_NOISE = new Set([
-  "UPI", "NEFT", "IMPS", "RTGS", "POS", "ATM", "TXN", "REF", "TRF", "PAYMENT", "PMT", "PUR", "DEBIT", "CREDIT",
-  "INR", "RS", "DR", "CR", "ACH", "NACH", "ECS", "BIL", "BILL", "ONLINE", "BANK", "TRANSFER", "WDL", "WITHDRAWAL",
-  "CARD", "VISA", "MASTERCARD", "RUPAY", "PAYTM", "PHONEPE", "GPAY", "GOOGLE", "BHIM", "PAY", "PVT", "LTD", "LIMITED",
-  "PRIVATE", "INDIA", "IND", "MUMBAI", "BANGALORE", "BENGALURU", "DELHI", "CHENNAI", "HYDERABAD", "PUNE", "KOLKATA",
+  "UPI",
+  "NEFT",
+  "IMPS",
+  "RTGS",
+  "POS",
+  "ATM",
+  "TXN",
+  "REF",
+  "TRF",
+  "PAYMENT",
+  "PMT",
+  "PUR",
+  "DEBIT",
+  "CREDIT",
+  "INR",
+  "RS",
+  "DR",
+  "CR",
+  "ACH",
+  "NACH",
+  "ECS",
+  "BIL",
+  "BILL",
+  "ONLINE",
+  "BANK",
+  "TRANSFER",
+  "WDL",
+  "WITHDRAWAL",
+  "CARD",
+  "VISA",
+  "MASTERCARD",
+  "RUPAY",
+  "PAYTM",
+  "PHONEPE",
+  "GPAY",
+  "GOOGLE",
+  "BHIM",
+  "PAY",
+  "PVT",
+  "LTD",
+  "LIMITED",
+  "PRIVATE",
+  "INDIA",
+  "IND",
+  "MUMBAI",
+  "BANGALORE",
+  "BENGALURU",
+  "DELHI",
+  "CHENNAI",
+  "HYDERABAD",
+  "PUNE",
+  "KOLKATA",
 ]);
 
-const CATEGORY_HINTS: Array<{ words: string[]; categories: string[]; type?: "expense" | "income" | "transfer" }> = [
-  { words: ["SALARY", "PAYROLL", "WAGES", "BONUS"], categories: ["Salary", "Salary & Income", "Income"], type: "income" },
-  { words: ["INTEREST", "DIVIDEND", "CASHBACK", "REFUND"], categories: ["Income", "Interest", "Refund", "Other Income"], type: "income" },
-  { words: ["SWIGGY", "ZOMATO", "DOMINOS", "MCDONALD", "STARBUCKS", "RESTAURANT", "CAFE", "BAKERY", "FOOD"], categories: ["Food & Dining", "Food", "Dining", "Restaurants"] },
-  { words: ["BLINKIT", "INSTAMART", "ZEPTO", "BIGBASKET", "GROCERY", "SUPERMARKET", "MART"], categories: ["Groceries", "Food & Dining"] },
-  { words: ["UBER", "OLA", "RAPIDO", "METRO", "FUEL", "PETROL", "DIESEL", "PARKING", "FASTAG"], categories: ["Transport", "Fuel", "Travel"] },
-  { words: ["AMAZON", "FLIPKART", "MYNTRA", "AJIO", "NYKAA", "SHOP", "MOTHERCARE", "RETAIL", "STORE"], categories: ["Shopping", "Kids & Family"] },
-  { words: ["NETFLIX", "SPOTIFY", "HOTSTAR", "PRIME", "BOOKMYSHOW", "YOUTUBE"], categories: ["Entertainment", "Subscriptions"] },
-  { words: ["AIRTEL", "JIO", "VI ", "VODAFONE", "MOBILE", "BROADBAND", "WIFI"], categories: ["Bills & Utilities", "Bills", "Utilities", "Phone"] },
-  { words: ["ELECTRICITY", "WATER", "GAS", "BESCOM", "TATA POWER"], categories: ["Bills & Utilities", "Utilities", "Bills"] },
+const CATEGORY_HINTS: Array<{
+  words: string[];
+  categories: string[];
+  type?: "expense" | "income" | "transfer";
+}> = [
+  {
+    words: ["SALARY", "PAYROLL", "WAGES", "BONUS"],
+    categories: ["Salary", "Salary & Income", "Income"],
+    type: "income",
+  },
+  {
+    words: ["INTEREST", "DIVIDEND", "CASHBACK", "REFUND"],
+    categories: ["Income", "Interest", "Refund", "Other Income"],
+    type: "income",
+  },
+  {
+    words: [
+      "SWIGGY",
+      "ZOMATO",
+      "DOMINOS",
+      "MCDONALD",
+      "STARBUCKS",
+      "RESTAURANT",
+      "CAFE",
+      "BAKERY",
+      "FOOD",
+    ],
+    categories: ["Food & Dining", "Food", "Dining", "Restaurants"],
+  },
+  {
+    words: ["BLINKIT", "INSTAMART", "ZEPTO", "BIGBASKET", "GROCERY", "SUPERMARKET", "MART"],
+    categories: ["Groceries", "Food & Dining"],
+  },
+  {
+    words: ["UBER", "OLA", "RAPIDO", "METRO", "FUEL", "PETROL", "DIESEL", "PARKING", "FASTAG"],
+    categories: ["Transport", "Fuel", "Travel"],
+  },
+  {
+    words: [
+      "AMAZON",
+      "FLIPKART",
+      "MYNTRA",
+      "AJIO",
+      "NYKAA",
+      "SHOP",
+      "MOTHERCARE",
+      "RETAIL",
+      "STORE",
+    ],
+    categories: ["Shopping", "Kids & Family"],
+  },
+  {
+    words: ["NETFLIX", "SPOTIFY", "HOTSTAR", "PRIME", "BOOKMYSHOW", "YOUTUBE"],
+    categories: ["Entertainment", "Subscriptions"],
+  },
+  {
+    words: ["AIRTEL", "JIO", "VI ", "VODAFONE", "MOBILE", "BROADBAND", "WIFI"],
+    categories: ["Bills & Utilities", "Bills", "Utilities", "Phone"],
+  },
+  {
+    words: ["ELECTRICITY", "WATER", "GAS", "BESCOM", "TATA POWER"],
+    categories: ["Bills & Utilities", "Utilities", "Bills"],
+  },
   { words: ["RENT", "MAINTENANCE", "SOCIETY"], categories: ["Housing & Rent", "Housing", "Rent"] },
-  { words: ["OFFUS EMI", "MER EMI", "SMART EMI", "EMI", "LOAN"], categories: ["Loans & EMI", "Loan", "Debt"], type: "transfer" },
-  { words: ["CREDIT CARD", "CC PAYMENT", "BPPY CC", "CRED"], categories: ["Transfers", "Credit Card", "Loan"], type: "transfer" },
-  { words: ["HOSPITAL", "PHARMACY", "MEDICAL", "APOLLO", "MANIPAL", "PRACTO", "MEDPLUS", "CLINIC"], categories: ["Health & Medical", "Health", "Medical"] },
+  {
+    words: ["OFFUS EMI", "MER EMI", "SMART EMI", "EMI", "LOAN"],
+    categories: ["Loans & EMI", "Loan", "Debt"],
+    type: "transfer",
+  },
+  {
+    words: ["CREDIT CARD", "CC PAYMENT", "BPPY CC", "CRED"],
+    categories: ["Transfers", "Credit Card", "Loan"],
+    type: "transfer",
+  },
+  {
+    words: ["HOSPITAL", "PHARMACY", "MEDICAL", "APOLLO", "MANIPAL", "PRACTO", "MEDPLUS", "CLINIC"],
+    categories: ["Health & Medical", "Health", "Medical"],
+  },
   { words: ["SCHOOL", "COLLEGE", "TUITION", "COURSE", "UDEMY"], categories: ["Education"] },
 ];
 
 function comparable(s: string): string {
-  return s.toUpperCase().replace(/[^A-Z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+  return s
+    .toUpperCase()
+    .replace(/[^A-Z0-9 ]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function payeeKey(s: string): string {
-  return comparable(s).replace(/\b(PVT|LTD|LIMITED|PRIVATE|INDIA|ONLINE|PAYMENTS?|BANK)\b/g, " ").replace(/\s+/g, " ").trim();
+  return comparable(s)
+    .replace(/\b(PVT|LTD|LIMITED|PRIVATE|INDIA|ONLINE|PAYMENTS?|BANK)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function titleCase(s: string): string {
   return s
     .toLowerCase()
     .replace(/\b\w/g, (m) => m.toUpperCase())
-    .replace(/\b(Upi|Imps|Neft|Rtgs|Atm|Emi|Hdfc|Icici|Sbi|Idfc|Pvt|Ltd)\b/g, (m) => m.toUpperCase());
+    .replace(/\b(Upi|Imps|Neft|Rtgs|Atm|Emi|Hdfc|Icici|Sbi|Idfc|Pvt|Ltd)\b/g, (m) =>
+      m.toUpperCase(),
+    );
 }
 
 function tokens(s: string): string[] {
@@ -78,7 +203,10 @@ function tokens(s: string): string[] {
  * narration. This is the clustering primitive — no AI involved.
  */
 function prominentTokens(desc: string): string[] {
-  const withHandlesExpanded = comparable(desc).replace(/\b([A-Z0-9._-]{3,})@[A-Z0-9._-]+\b/g, " $1 ");
+  const withHandlesExpanded = comparable(desc).replace(
+    /\b([A-Z0-9._-]{3,})@[A-Z0-9._-]+\b/g,
+    " $1 ",
+  );
   const segments = withHandlesExpanded
     .split(/[\/|*:_\-]+/g)
     .map((s) => s.trim())
@@ -90,7 +218,8 @@ function prominentTokens(desc: string): string[] {
     const ts = tokens(segment);
     if (!ts.length) continue;
     const alpha = ts.filter((t) => /[A-Z]/.test(t)).length;
-    const score = alpha * 3 + Math.min(ts.join(" ").length, 24) - (segment.match(/\d/g)?.length ?? 0);
+    const score =
+      alpha * 3 + Math.min(ts.join(" ").length, 24) - (segment.match(/\d/g)?.length ?? 0);
     if (score > bestScore) {
       bestScore = score;
       best = ts.slice(0, 4);
@@ -119,27 +248,37 @@ function cleanPayeeName(desc: string): string {
   return titleCase(best || desc.slice(0, 60)).slice(0, 80);
 }
 
-function guessCategory(name: string, descriptions: string[], categories: Array<{ name: string; kind: string }>): string {
+function guessCategory(
+  name: string,
+  descriptions: string[],
+  categories: Array<{ name: string; kind: string }>,
+): string {
   const haystack = comparable(`${name} ${descriptions.join(" ")}`);
   const categoryNames = categories.map((c) => c.name);
   for (const hint of CATEGORY_HINTS) {
     if (!hint.words.some((w) => haystack.includes(w))) continue;
-    const match = categoryNames.find((cat) => hint.categories.some((target) => cat.toLowerCase().includes(target.toLowerCase())));
+    const match = categoryNames.find((cat) =>
+      hint.categories.some((target) => cat.toLowerCase().includes(target.toLowerCase())),
+    );
     if (match) return match;
   }
   return "";
 }
 
-function inferType(descriptions: string[], typeByDesc: Map<string, "expense" | "income" | "transfer">): "expense" | "income" | "transfer" {
+function inferType(
+  descriptions: string[],
+  typeByDesc: Map<string, "expense" | "income" | "transfer">,
+): "expense" | "income" | "transfer" {
   const counts = { expense: 0, income: 0, transfer: 0 };
   for (const d of descriptions) counts[typeByDesc.get(d) ?? "expense"]++;
   if (counts.income > counts.expense && counts.income >= counts.transfer) return "income";
   if (counts.transfer > counts.expense && counts.transfer >= counts.income) return "transfer";
   const haystack = comparable(descriptions.join(" "));
-  const hinted = CATEGORY_HINTS.find((h) => h.type && h.words.some((w) => haystack.includes(w)))?.type;
+  const hinted = CATEGORY_HINTS.find(
+    (h) => h.type && h.words.some((w) => haystack.includes(w)),
+  )?.type;
   return hinted ?? "expense";
 }
-
 
 type ExistingPayeeRich = { name: string; aliases: string[] };
 
@@ -162,7 +301,10 @@ function buildMatcherIndex(existing: ExistingPayeeRich[]): MatcherIndex {
     // seed tokens from name
     for (const t of nameTokens) {
       let set = tokenIndex.get(t);
-      if (!set) { set = new Set(); tokenIndex.set(t, set); }
+      if (!set) {
+        set = new Set();
+        tokenIndex.set(t, set);
+      }
       set.add(name);
     }
     // seed fingerprints + tokens from aliases
@@ -171,7 +313,10 @@ function buildMatcherIndex(existing: ExistingPayeeRich[]): MatcherIndex {
       if (fp) fingerprintMap.set(fp, name);
       for (const t of tokens(a)) {
         let set = tokenIndex.get(t);
-        if (!set) { set = new Set(); tokenIndex.set(t, set); }
+        if (!set) {
+          set = new Set();
+          tokenIndex.set(t, set);
+        }
         set.add(name);
       }
     }
@@ -214,11 +359,22 @@ function clusterPayeesFast(
   categories: Array<{ name: string; kind: string }>,
   existingPayees: ExistingPayeeRich[],
   typeByDesc = new Map<string, "expense" | "income" | "transfer">(),
-): Promise<Array<{ name: string; descriptions: string[]; suggestedCategory: string; type: "expense" | "income" | "transfer"; isExisting: boolean }>> {
+): Promise<
+  Array<{
+    name: string;
+    descriptions: string[];
+    suggestedCategory: string;
+    type: "expense" | "income" | "transfer";
+    isExisting: boolean;
+  }>
+> {
   if (!descriptions.length) return Promise.resolve([]);
 
   const idx = buildMatcherIndex(existingPayees);
-  const groups = new Map<string, { name: string; descriptions: Set<string>; isExisting: boolean }>();
+  const groups = new Map<
+    string,
+    { name: string; descriptions: Set<string>; isExisting: boolean }
+  >();
 
   for (const d of descriptions) {
     const existing = matchExistingPayee(d, idx);
@@ -242,19 +398,23 @@ function clusterPayeesFast(
     }
   }
 
-  return Promise.resolve(Array.from(groups.values()).map((v) => {
-    const descs = Array.from(v.descriptions);
-    return {
-      name: v.name,
-      descriptions: descs,
-      suggestedCategory: guessCategory(v.name, descs, categories),
-      type: inferType(descs, typeByDesc),
-      isExisting: v.isExisting,
-    };
-  }).sort((a, b) => b.descriptions.length - a.descriptions.length || a.name.localeCompare(b.name)));
+  return Promise.resolve(
+    Array.from(groups.values())
+      .map((v) => {
+        const descs = Array.from(v.descriptions);
+        return {
+          name: v.name,
+          descriptions: descs,
+          suggestedCategory: guessCategory(v.name, descs, categories),
+          type: inferType(descs, typeByDesc),
+          isExisting: v.isExisting,
+        };
+      })
+      .sort(
+        (a, b) => b.descriptions.length - a.descriptions.length || a.name.localeCompare(b.name),
+      ),
+  );
 }
-
-
 
 // ---------- Server functions ----------
 
@@ -320,7 +480,14 @@ Rules:
         }),
       });
 
-      if (!res.ok) return { bank: null, currency: null, periodStart: null, periodEnd: null, estimatedRows: null };
+      if (!res.ok)
+        return {
+          bank: null,
+          currency: null,
+          periodStart: null,
+          periodEnd: null,
+          estimatedRows: null,
+        };
       const json = await res.json();
       const text = json.choices?.[0]?.message?.content ?? "";
       let parsed = salvageJson(text) ?? (typeof json === "object" ? json : null);
@@ -329,7 +496,14 @@ Rules:
         parsed = salvageJson(parsed);
       }
 
-      if (!parsed) return { bank: null, currency: null, periodStart: null, periodEnd: null, estimatedRows: null };
+      if (!parsed)
+        return {
+          bank: null,
+          currency: null,
+          periodStart: null,
+          periodEnd: null,
+          estimatedRows: null,
+        };
 
       // Normalize ISO dates if needed
       const normalizeDate = (d: any): string | null => {
@@ -343,13 +517,27 @@ Rules:
 
       return {
         bank: typeof parsed.bank === "string" && parsed.bank.trim() ? parsed.bank.trim() : null,
-        currency: typeof parsed.currency === "string" && parsed.currency.trim() ? parsed.currency.trim().toUpperCase() : null,
+        currency:
+          typeof parsed.currency === "string" && parsed.currency.trim()
+            ? parsed.currency.trim().toUpperCase()
+            : null,
         periodStart: normalizeDate(parsed.periodStart),
         periodEnd: normalizeDate(parsed.periodEnd),
-        estimatedRows: typeof parsed.estimatedRows === "number" ? parsed.estimatedRows : (typeof parsed.estimatedRows === "string" ? parseInt(parsed.estimatedRows, 10) || null : null),
+        estimatedRows:
+          typeof parsed.estimatedRows === "number"
+            ? parsed.estimatedRows
+            : typeof parsed.estimatedRows === "string"
+              ? parseInt(parsed.estimatedRows, 10) || null
+              : null,
       };
     } catch {
-      return { bank: null, currency: null, periodStart: null, periodEnd: null, estimatedRows: null };
+      return {
+        bank: null,
+        currency: null,
+        periodStart: null,
+        periodEnd: null,
+        estimatedRows: null,
+      };
     }
   });
 
@@ -397,7 +585,11 @@ export const extractStatementRows = createServerFn({ method: "POST" })
         wb = XLSX.read(text, { type: "string" });
       }
       for (const name of wb.SheetNames) {
-        const aoa = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, raw: true, blankrows: false }) as any[][];
+        const aoa = XLSX.utils.sheet_to_json(wb.Sheets[name], {
+          header: 1,
+          raw: true,
+          blankrows: false,
+        }) as any[][];
         const rows = extractRowsFromAOA(aoa);
         extracted.push(...rows);
         if (extracted.length) break;
@@ -408,7 +600,11 @@ export const extractStatementRows = createServerFn({ method: "POST" })
       let aoa: any[][] = [];
       try {
         const wb = XLSX.read(text, { type: "string" });
-        aoa = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, blankrows: false }) as any[][];
+        aoa = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {
+          header: 1,
+          raw: true,
+          blankrows: false,
+        }) as any[][];
       } catch {
         // Line-by-line fallback for text files
         aoa = text.split(/\r?\n/).map((line) => line.split(/\t+|,/));
@@ -416,7 +612,8 @@ export const extractStatementRows = createServerFn({ method: "POST" })
       extracted = extractRowsFromAOA(aoa);
     } else if (isPdf) {
       const apiKey = process.env.LOVABLE_API_KEY;
-      if (!apiKey && !process.env.OLLAMA_BASE_URL) throw new Error("Missing LOVABLE_API_KEY or OLLAMA_BASE_URL");
+      if (!apiKey && !process.env.OLLAMA_BASE_URL)
+        throw new Error("Missing LOVABLE_API_KEY or OLLAMA_BASE_URL");
       const categoryList = (cats ?? []).map((c: any) => c.name).join(", ");
       const { transactions } = await parsePdfWithAI(
         data.base64,
@@ -433,17 +630,30 @@ export const extractStatementRows = createServerFn({ method: "POST" })
 
     return {
       transactions: extracted,
-      categories: (cats ?? []) as Array<{ id: string; name: string; kind: string; parent_id: string | null }>,
-      existingPayees: existingPayees as Array<{ id: string; merchant: string; category_id: string | null }>,
+      categories: (cats ?? []) as Array<{
+        id: string;
+        name: string;
+        kind: string;
+        parent_id: string | null;
+      }>,
+      existingPayees: existingPayees as Array<{
+        id: string;
+        merchant: string;
+        category_id: string | null;
+      }>,
     };
   });
 
 const clusterInput = z.object({
   descriptions: z.array(z.string()).min(1).max(20000).default([]),
-  transactions: z.array(z.object({
-    description: z.string(),
-    type: z.enum(["income", "expense", "transfer"]).optional(),
-  })).optional(),
+  transactions: z
+    .array(
+      z.object({
+        description: z.string(),
+        type: z.enum(["income", "expense", "transfer"]).optional(),
+      }),
+    )
+    .optional(),
 });
 
 /**
@@ -511,7 +721,8 @@ export const polishPayeeNames = createServerFn({ method: "POST" })
     const baseURL = process.env.OLLAMA_BASE_URL || "https://ai.gateway.lovable.dev/v1";
     const model = process.env.OLLAMA_MODEL || "google/gemini-2.5-flash";
 
-    if (!apiKey && !process.env.OLLAMA_BASE_URL) throw new Error("Missing LOVABLE_API_KEY or OLLAMA_BASE_URL");
+    if (!apiKey && !process.env.OLLAMA_BASE_URL)
+      throw new Error("Missing LOVABLE_API_KEY or OLLAMA_BASE_URL");
 
     const lines = data.clusters
       .map((c, i) => `${i}| ${c.name} | ${c.count} txns | e.g. ${c.sample.slice(0, 120)}`)
@@ -559,7 +770,9 @@ Rules:
     for (const [k, v] of Object.entries(parsed?.renames ?? {})) {
       const idx = Number(k);
       if (!Number.isInteger(idx) || idx < 0 || idx >= data.clusters.length) continue;
-      const name = String(v ?? "").trim().slice(0, 80);
+      const name = String(v ?? "")
+        .trim()
+        .slice(0, 80);
       if (name) renames[idx] = name;
     }
     const merges: number[][] = Array.isArray(parsed?.merges)
@@ -570,7 +783,9 @@ Rules:
                   new Set(
                     g
                       .map((n: any) => Number(n))
-                      .filter((n: number) => Number.isInteger(n) && n >= 0 && n < data.clusters.length),
+                      .filter(
+                        (n: number) => Number.isInteger(n) && n >= 0 && n < data.clusters.length,
+                      ),
                   ),
                 )
               : [],
@@ -581,7 +796,83 @@ Rules:
     return { renames, merges };
   });
 
+const categorizeClustersInput = z.object({
+  clusters: z
+    .array(
+      z.object({
+        name: z.string().min(1).max(120),
+        sample: z.string().max(240).default(""),
+      }),
+    )
+    .min(1)
+    .max(400),
+  categoryNames: z.array(z.string().min(1).max(120)).min(1).max(500),
+});
 
+/** Categorize only unresolved confirm-step clusters using real household categories. */
+export const categorizePayeeClusters = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d: unknown) => categorizeClustersInput.parse(d))
+  .handler(async ({ data }) => {
+    const apiKey = process.env.LOVABLE_API_KEY;
+    const baseURL = process.env.OLLAMA_BASE_URL || "https://ai.gateway.lovable.dev/v1";
+    const model = process.env.OLLAMA_MODEL || "google/gemini-2.5-flash";
+
+    if (!apiKey && !process.env.OLLAMA_BASE_URL) {
+      throw new Error("Missing LOVABLE_API_KEY or OLLAMA_BASE_URL");
+    }
+
+    const lines = data.clusters
+      .map((cluster, index) => `${index}| ${cluster.name} | ${cluster.sample.slice(0, 180)}`)
+      .join("\n");
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (apiKey) headers["Lovable-API-Key"] = apiKey;
+
+    const res = await fetch(`${baseURL}/chat/completions`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model,
+        messages: [
+          {
+            role: "system",
+            content: `Categorize Indian bank-statement payees. Choose exactly one category from this list for every input: ${data.categoryNames.join(", ")}.
+Return ONLY JSON in this shape: { "categories": { "<index>": "<exact category name>" } }.
+Do not invent category names. Use the payee and raw narration together. If uncertain, choose the closest broad category from the list.`,
+          },
+          { role: "user", content: lines },
+        ],
+        response_format: { type: "json_object" },
+        max_tokens: Math.min(8000, Math.max(1200, data.clusters.length * 24)),
+      }),
+    });
+    if (!res.ok) throw new Error(`AI gateway failed [${res.status}]`);
+
+    const json = await res.json();
+    const content: string = json.choices?.[0]?.message?.content ?? "{}";
+    let parsed: any;
+    try {
+      parsed = JSON.parse(content);
+    } catch {
+      parsed = salvageJson(content) ?? {};
+    }
+
+    const allowed = new Map(data.categoryNames.map((name) => [name.toLowerCase(), name]));
+    const categories: Record<number, string> = {};
+    for (const [key, value] of Object.entries(parsed?.categories ?? {})) {
+      const index = Number(key);
+      const category = allowed.get(
+        String(value ?? "")
+          .trim()
+          .toLowerCase(),
+      );
+      if (Number.isInteger(index) && index >= 0 && index < data.clusters.length && category) {
+        categories[index] = category;
+      }
+    }
+
+    return { categories };
+  });
 
 const bulkInput = z.object({
   accountId: z.string().uuid(),
@@ -615,7 +906,6 @@ const bulkInput = z.object({
   importToken: z.string().uuid().optional(),
   uploadId: z.string().uuid().optional(),
 });
-
 
 const MAX_ALIASES_PER_PAYEE = 50;
 
@@ -667,15 +957,18 @@ export const bulkInsertTransactions = createServerFn({ method: "POST" })
       claimedUploadId = (upload?.id as string) ?? data.uploadId ?? null;
     }
 
-
-
     // ---- Payee alias learning ----
     // Fetch every payee we might touch (new + those receiving new aliases) in one call.
-    const aliasKeys = Object.keys(data.payeeAliases ?? {}).map((k) => k.trim()).filter(Boolean);
+    const aliasKeys = Object.keys(data.payeeAliases ?? {})
+      .map((k) => k.trim())
+      .filter(Boolean);
     const newPayeeNames = data.newPayees.map((p) => p.merchant.trim()).filter(Boolean);
     const namesToLoad = Array.from(new Set([...aliasKeys, ...newPayeeNames]));
 
-    let existingByName = new Map<string, { id: string; aliases: string[]; match_tokens: string[] }>();
+    let existingByName = new Map<
+      string,
+      { id: string; aliases: string[]; match_tokens: string[] }
+    >();
     if (namesToLoad.length) {
       const { data: existing, error: exErr } = await context.supabase
         .from("memorized_payees")
@@ -735,8 +1028,11 @@ export const bulkInsertTransactions = createServerFn({ method: "POST" })
       if (!target || !descs?.length) continue;
       const merged = dedupeAliases([...target.aliases, ...descs]);
       // Skip write when nothing new was learned.
-      if (merged.length === target.aliases.length &&
-          merged.every((a, i) => a === target.aliases[i])) continue;
+      if (
+        merged.length === target.aliases.length &&
+        merged.every((a, i) => a === target.aliases[i])
+      )
+        continue;
       const nextTokens = matchTokensFor(key, merged);
       const { error: upErr } = await context.supabase
         .from("memorized_payees")
@@ -760,7 +1056,9 @@ export const bulkInsertTransactions = createServerFn({ method: "POST" })
     // Helper to test if a row is an EMI processing fee or installment row
     const isEmiChild = (t: any) => {
       const s = cleanStr(`${t.description ?? ""} ${t.merchant ?? ""} ${t.note ?? ""}`);
-      return /OFFUS.*EMI|MER.*EMI|SMART.*EMI|EMI.*PRIN|EMI.*INT|PROCNG.*FEE|INSTALMENT|INSTALLMENT/i.test(s);
+      return /OFFUS.*EMI|MER.*EMI|SMART.*EMI|EMI.*PRIN|EMI.*INT|PROCNG.*FEE|INSTALMENT|INSTALLMENT/i.test(
+        s,
+      );
     };
 
     // Link parent debit purchase with child EMI transactions (disbursement, fee, installments)
@@ -775,7 +1073,9 @@ export const bulkInsertTransactions = createServerFn({ method: "POST" })
         for (let j = 0; j < rawTxns.length; j++) {
           if (j === i) continue;
           if (isEmiChild(rawTxns[j]) || isEmiCredit(rawTxns[j])) continue;
-          const candidateStr = cleanStr(`${(rawTxns[j] as any).description ?? rawTxns[j].note ?? ""} ${rawTxns[j].merchant ?? ""}`);
+          const candidateStr = cleanStr(
+            `${(rawTxns[j] as any).description ?? rawTxns[j].note ?? ""} ${rawTxns[j].merchant ?? ""}`,
+          );
           const isParentType = rawTxns[j].type === "expense" || candidateStr.includes("MOTHERCARE");
           if (isParentType) {
             const diff = Math.abs(rawTxns[j].amount - creditAmt);
@@ -888,7 +1188,6 @@ export const bulkInsertTransactions = createServerFn({ method: "POST" })
         .eq("id", claimedUploadId);
     }
 
-
     // Recompute account balance
     const { data: acc } = await context.supabase
       .from("accounts")
@@ -919,4 +1218,3 @@ export const bulkInsertTransactions = createServerFn({ method: "POST" })
     }
     return { ok: true, inserted: data.transactions.length, alreadyImported: false, batchId };
   });
-

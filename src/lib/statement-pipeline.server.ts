@@ -11,6 +11,8 @@
 import { normalizePattern } from "./statement-normalize";
 import { extractRowsFromAOA, parsePdfWithAI, type ExtractedTxn } from "./statement-parse.server";
 import { resolveFromLookups, type ResolvedMap } from "./statement-classify.server";
+import { lookupPatternCategories } from "./pattern-categories.functions";
+import { buildCategoryIndex } from "./category-resolver";
 
 import { getHouseholdId as getHhId } from "@/lib/household.server";
 
@@ -207,7 +209,34 @@ export async function runStatementUpload(opts: {
     }
     const patterns = Array.from(groups.keys());
 
-    const { resolved, unresolved } = await resolveFromLookups(supabase, userId, patterns);
+    // Fetch categories + payees BEFORE resolve (need CategoryIndex for enrichment)
+    const [{ data: cats }, { data: payeeRows }] = await Promise.all([
+      supabase
+        .from("categories")
+        .select("id, name, kind, parent_id")
+        .eq("household_id", householdId),
+      supabase
+        .from("memorized_payees")
+        .select("id, merchant, category_id, aliases")
+        .eq("household_id", householdId),
+    ]);
+    const categories = (cats ?? []) as Array<{ id: string; name: string; kind: string; parent_id: string | null }>;
+    const userCategoryNames = categories.map((c) => c.name);
+
+    // Resolve with pattern-level category lookups
+    const { resolved, unresolved } = await resolveFromLookups(supabase, userId, patterns, householdId);
+
+    // Also fetch pattern-level category UUIDs for clusters
+    const patternCatMap = await lookupPatternCategories(supabase, householdId, patterns);
+    // Enrich resolved entries with pattern-level category UUIDs
+    const categoryIndex = buildCategoryIndex(categories);
+    for (const [pattern, info] of patternCatMap) {
+      if (resolved[pattern] && !resolved[pattern].category) {
+        const catName = categoryIndex.nameById.get(info.categoryId);
+        if (catName) resolved[pattern].category = catName;
+      }
+    }
+
     const pending = unresolved.map((p) => groups.get(p)!).filter(Boolean);
 
     const needsAi = pending.length > 0;
@@ -227,23 +256,13 @@ export async function runStatementUpload(opts: {
 
     if (needsAi) {
       // Detached invocation: keeps working even if the user closes the tab.
+      // Now includes user's category names and householdId for pattern persistence.
       void fetch(`${origin}/api/public/hooks/statement-classify`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ uploadId, jobToken, pending }),
+        body: JSON.stringify({ uploadId, jobToken, pending, userCategoryNames, householdId }),
       }).catch(() => undefined);
     }
-
-    const [{ data: cats }, { data: payeeRows }] = await Promise.all([
-      supabase
-        .from("categories")
-        .select("id, name, kind, parent_id")
-        .eq("household_id", householdId),
-      supabase
-        .from("memorized_payees")
-        .select("id, merchant, category_id, aliases")
-        .eq("household_id", householdId),
-    ]);
 
     return {
       uploadId,
@@ -252,7 +271,7 @@ export async function runStatementUpload(opts: {
       transactions,
       resolved,
       pending,
-      categories: (cats ?? []) as any,
+      categories: categories as any,
       existingPayees: (payeeRows ?? []) as any,
     };
 
@@ -330,8 +349,38 @@ export async function saveCorrections(
       })),
       { onConflict: "normalized_pattern" },
     );
+
+    // Also persist to payee_pattern_categories (household-scoped)
+    // Requires householdId — derive from userId
+    const householdId = await getHhId({ supabase, userId });
+    if (householdId) {
+      const { data: allCats } = await supabase
+        .from("categories")
+        .select("id, name, kind, parent_id")
+        .eq("household_id", householdId);
+      if (allCats?.length) {
+        const catIndex = buildCategoryIndex(allCats);
+        const { savePatternCategories: savePPC } = await import("./pattern-categories.functions");
+        const entries = corrections
+          .filter((c) => c.category)
+          .map((c) => {
+            const { resolveCategoryId: resolve } = require("./category-resolver");
+            return {
+              pattern: c.normalizedPattern,
+              categoryId: resolve(c.category, catIndex),
+              categoryName: c.category,
+              source: 'learned' as const,
+              confidence: 0.95,
+            };
+          })
+          .filter((e) => e.categoryId);
+        if (entries.length) {
+          await savePPC(supabaseAdmin, householdId, entries);
+        }
+      }
+    }
   } catch {
-    // dictionary promotion is non-critical
+    // dictionary + pattern promotion is non-critical
   }
 
   return { saved: corrections.length };

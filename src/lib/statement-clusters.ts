@@ -8,6 +8,7 @@
  */
 
 import { titleCase, normalizePattern } from "./statement-normalize";
+import { resolveCategoryId, categorizeByKeywords, type CategoryIndex } from "./category-resolver";
 
 export type MatchSource =
   | "alias"
@@ -161,7 +162,7 @@ class UnionFind {
 }
 
 const SIM_THRESHOLD = 0.82;
-const MAX_BLOCK = 60; // cap fuzzy comparisons inside a token block
+const MAX_BLOCK = 150; // raised from 60 to support large payees like Amazon with 80+ variants
 
 /**
  * Group unique patterns into merchant clusters.
@@ -259,8 +260,10 @@ export function buildClusters(opts: {
   resolved: Record<string, ResolvedEntry>;
   existingPayees: Array<{ id: string; merchant: string; category_id: string | null }>;
   categoryIdByName: Map<string, string>;
+  categoryIndex?: CategoryIndex;
+  patternCategoryMap?: Map<string, string>;
 }): Cluster[] {
-  const { transactions, resolved, existingPayees, categoryIdByName } = opts;
+  const { transactions, resolved, existingPayees, categoryIdByName, categoryIndex, patternCategoryMap } = opts;
 
   // 1 · aggregate by unique description within a pattern
   const byPattern = new Map<string, Map<string, Member>>();
@@ -381,10 +384,31 @@ export function buildClusters(opts: {
     const status = isExisting ? "auto" : statusFor(source, confidence);
 
     let category_id = existing?.category_id ?? null;
+    // Try pattern-specific category from payee_pattern_categories
+    if (!category_id && patternCategoryMap) {
+      category_id = patternCategoryMap.get(rep) ?? null;
+      // Also check other patterns in the group
+      if (!category_id) {
+        for (const p of group) {
+          const patCat = patternCategoryMap.get(p);
+          if (patCat) { category_id = patCat; break; }
+        }
+      }
+    }
+    // Then fuzzy-resolve from AI/dictionary hit using category resolver
     if (!category_id && hit?.category) {
-      category_id =
-        categoryIdByName.get(hit.category.toLowerCase()) ??
-        (categoryIdByName.get(hit.category) ?? null);
+      if (categoryIndex) {
+        category_id = resolveCategoryId(hit.category, categoryIndex) ?? null;
+      } else {
+        // Fallback to exact match
+        category_id =
+          categoryIdByName.get(hit.category.toLowerCase()) ??
+          (categoryIdByName.get(hit.category) ?? null);
+      }
+    }
+    // Then keyword-based categorization as last resort
+    if (!category_id && categoryIndex) {
+      category_id = categorizeByKeywords(rep, members[0]?.description ?? '', categoryIndex);
     }
 
     return {
@@ -616,4 +640,53 @@ export function groupClustersByCategory(
     if (!b.categoryId) return 1;
     return b.totalTxns - a.totalTxns;
   });
+}
+
+// ---------------------------------------------------------- auto-pilot gate
+
+export type ReadinessResult = {
+  /** 0..1 readiness score — fraction of clusters that are auto-approvable */
+  score: number;
+  /** Tier 1 clusters: alias, payee, rule, or confidence ≥ 0.85 */
+  autoCount: number;
+  /** Tier 2 clusters: have a category, confidence ≥ 0.50 */
+  suggestedCount: number;
+  /** Tier 3 clusters: uncategorized or low confidence */
+  reviewCount: number;
+  /** Fraction of non-ignored clusters with a category assigned */
+  categorizedPct: number;
+  /** Total non-ignored clusters */
+  total: number;
+};
+
+/**
+ * Compute how "ready" the cluster set is for auto-approval.
+ * Used by the import dialog to decide whether to skip the confirm step.
+ */
+export function computeReadiness(clusters: Cluster[]): ReadinessResult {
+  const active = clusters.filter((c) => c.status !== "ignored");
+  const total = active.length;
+  if (total === 0) return { score: 1, autoCount: 0, suggestedCount: 0, reviewCount: 0, categorizedPct: 1, total: 0 };
+
+  let t1 = 0;
+  let t2 = 0;
+  let t3 = 0;
+  let withCat = 0;
+
+  for (const c of active) {
+    const tier = getClusterTier(c);
+    if (tier === "tier1") t1++;
+    else if (tier === "tier2") t2++;
+    else t3++;
+    if (c.category_id) withCat++;
+  }
+
+  return {
+    score: (t1 + t2 * 0.8) / total,
+    autoCount: t1,
+    suggestedCount: t2,
+    reviewCount: t3,
+    categorizedPct: withCat / total,
+    total,
+  };
 }

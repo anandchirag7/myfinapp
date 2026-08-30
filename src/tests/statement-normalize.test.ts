@@ -8,6 +8,8 @@ import {
   PIPELINE_CATEGORIES,
 } from "../lib/statement-normalize";
 import { buildClusters } from "../lib/statement-clusters";
+import { DEFAULT_CATEGORY_TEMPLATES } from "../lib/default-category-templates";
+import { buildCategoryIndex, categorizeByKeywords } from "../lib/category-resolver";
 
 export function registerStatementNormalizeTests() {
   describe("Statement Normalization & UPI Parsing Engine", () => {
@@ -57,7 +59,11 @@ export function registerStatementNormalizeTests() {
           id: "p1",
           merchant: "Indmoney",
           category_id: "cat-investments",
-          aliases: ["UPI/428392193821/FINZOOMERS CF/HDFC000123/Payment", "FINZOOMERS CF", "FINZOOMERS"],
+          aliases: [
+            "UPI/428392193821/FINZOOMERS CF/HDFC000123/Payment",
+            "FINZOOMERS CF",
+            "FINZOOMERS",
+          ],
         },
       ];
 
@@ -103,7 +109,33 @@ export function registerStatementNormalizeTests() {
       expect(PIPELINE_CATEGORIES).toContain("Groceries");
       expect(PIPELINE_CATEGORIES).toContain("Investments");
       expect(PIPELINE_CATEGORIES).toContain("Salary & Income");
-      expect(PIPELINE_CATEGORIES.length).toBeGreaterThan(20);
+      expect(PIPELINE_CATEGORIES.length).toBe(98);
+      expect(new Set(PIPELINE_CATEGORIES).size).toBe(98);
+    });
+
+    it("keeps every default template key unique with a valid parent", () => {
+      const keys = new Set(DEFAULT_CATEGORY_TEMPLATES.map((template) => template.key));
+      expect(keys.size).toBe(98);
+
+      for (const template of DEFAULT_CATEGORY_TEMPLATES) {
+        if (template.parentKey) expect(keys.has(template.parentKey)).toBe(true);
+      }
+    });
+
+    it("uses compact leaf categories and ignores generic payment rails", () => {
+      const categories = ["Food Delivery", "Mobile & Internet", "Transfers"].map((name, index) => ({
+        id: `category-${index}`,
+        name,
+        kind: name === "Transfers" ? "transfer" : "expense",
+        parent_id: null,
+      }));
+      const categoryIndex = buildCategoryIndex(categories);
+
+      expect(categorizeByKeywords("SWIGGY", "food order", categoryIndex)).toBe("category-0");
+      expect(categorizeByKeywords("ACT FIBERNET", "broadband bill", categoryIndex)).toBe(
+        "category-1",
+      );
+      expect(categorizeByKeywords("PHONEPE", "UPI payment", categoryIndex)).toBeNull();
     });
   });
 }

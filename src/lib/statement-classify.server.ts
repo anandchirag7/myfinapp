@@ -2,8 +2,9 @@
  * Server-only merchant resolution for the statement upload pipeline.
  *
  * Layer 1: user overrides (personal, always wins)
- * Layer 2: global merchant dictionary (shared, seeded + AI-grown)
- * Layer 3: batched AI classification (runs in the background, never blocks)
+ * Layer 2: pattern-level category lookups (payee_pattern_categories)
+ * Layer 3: global merchant dictionary (shared, seeded + AI-grown)
+ * Layer 4: batched AI classification (runs in the background, never blocks)
  */
 
 import {
@@ -14,6 +15,8 @@ import {
   withConcurrency,
   PIPELINE_CATEGORIES,
 } from "./statement-normalize";
+import { lookupPatternCategories, lookupPatternCategoryNames, savePatternCategories } from "./pattern-categories.functions";
+import { buildCategoryIndex, resolveCategoryId, type CategoryIndex } from "./category-resolver";
 
 export type ResolvedMerchant = {
   payee: string;
@@ -23,11 +26,12 @@ export type ResolvedMerchant = {
 
 export type ResolvedMap = Record<string, ResolvedMerchant>;
 
-/** Resolve patterns against user overrides + global dictionary (no AI). */
+/** Resolve patterns against user overrides + pattern categories + global dictionary (no AI). */
 export async function resolveFromLookups(
   supabase: any,
   userId: string,
   patterns: string[],
+  householdId?: string,
 ): Promise<{ resolved: ResolvedMap; unresolved: string[] }> {
   const resolved: ResolvedMap = {};
   if (!patterns.length) return { resolved, unresolved: [] };
@@ -122,6 +126,12 @@ export async function resolveFromLookups(
 
   const unresolved: string[] = [];
 
+  // Layer: Pattern-level category lookups (payee_pattern_categories)
+  let patternCatNames = new Map<string, string>();
+  if (householdId) {
+    patternCatNames = await lookupPatternCategoryNames(supabase, householdId, patterns);
+  }
+
   for (const p of patterns) {
     const keys = keysByPattern.get(p) ?? [p];
     let hit: ResolvedMerchant | null = null;
@@ -148,6 +158,17 @@ export async function resolveFromLookups(
         }
       }
     }
+
+    // Enrich with pattern-level category name if available and no category yet
+    if (hit && !hit.category) {
+      const patCatName = patternCatNames.get(p);
+      if (patCatName) hit.category = patCatName;
+    }
+    // If not resolved at all, but we have a pattern-level category name, create a hit
+    if (!hit && patternCatNames.has(p)) {
+      hit = { payee: titleCase(p), category: patternCatNames.get(p)!, source: "dictionary" };
+    }
+
     if (hit) resolved[p] = hit;
     else unresolved.push(p);
   }
@@ -161,18 +182,25 @@ const CONCURRENCY = 4;
 
 type Sample = { pattern: string; samples: string[]; type: string };
 
-/** Ask the model to name + categorise one batch of unknown patterns. */
-async function classifyBatch(batch: Sample[], apiKey?: string): Promise<ResolvedMap> {
+/** Ask the model to name + categorise one batch of unknown patterns.
+ *  Now accepts user's actual category names for better resolution. */
+async function classifyBatch(batch: Sample[], apiKey?: string, userCategoryNames?: string[]): Promise<ResolvedMap> {
   const baseURL = process.env.OLLAMA_BASE_URL || "https://ai.gateway.lovable.dev/v1";
   const model = process.env.OLLAMA_MODEL || AI_MODEL;
 
+  // Use user's actual category names when available, fall back to pipeline defaults
+  const categoryList = (userCategoryNames && userCategoryNames.length > 0)
+    ? userCategoryNames.join(", ")
+    : PIPELINE_CATEGORIES.join(", ");
+
   const system = `You label bank statement merchant patterns.
 For each input pattern return the clean, human-readable merchant/payee name and one category.
-Allowed categories: ${PIPELINE_CATEGORIES.join(", ")}.
+Allowed categories: ${categoryList}.
 Rules:
 - Use the well-known brand name when recognisable ("SWIGGY" -> "Swiggy", "HDFCLIFE" -> "HDFC Life").
 - Person-to-person transfers: use the person's name in Title Case, category "Transfers".
 - Salary credits: category "Salary & Income". Bank charges/fees: "Fees & Charges".
+- Pick the MOST SPECIFIC matching category from the allowed list.
 - Never invent patterns and never drop one. Output compact JSON only:
 {"results":[{"pattern":"<exact input pattern>","payee":"<name>","category":"<category>"}]}`;
 
@@ -209,12 +237,18 @@ Rules:
   }
 
   const out: ResolvedMap = {};
-  const allowed = new Set<string>(PIPELINE_CATEGORIES as readonly string[]);
+  // Accept both pipeline categories and user's custom categories
+  const allowed = new Set<string>([
+    ...(PIPELINE_CATEGORIES as readonly string[]),
+    ...(userCategoryNames ?? []),
+  ]);
   for (const r of Array.isArray(parsed.results) ? parsed.results : []) {
     const pattern = String(r?.pattern ?? "").trim();
     const payee = String(r?.payee ?? "").trim();
     if (!pattern || !payee) continue;
-    const category = allowed.has(String(r?.category)) ? String(r.category) : null;
+    // Accept any category the AI returns (it might use user's names)
+    const rawCat = String(r?.category ?? "").trim();
+    const category = rawCat || null;
     out[pattern] = { payee: payee.slice(0, 120), category, source: "ai" };
   }
   return out;
@@ -230,8 +264,11 @@ export async function classifyPendingPatterns(opts: {
   uploadId: string;
   pending: Sample[];
   apiKey?: string;
+  userCategoryNames?: string[];
+  householdId?: string;
+  categoryIndex?: CategoryIndex;
 }): Promise<ResolvedMap> {
-  const { admin, uploadId, pending, apiKey } = opts;
+  const { admin, uploadId, pending, apiKey, userCategoryNames, householdId, categoryIndex } = opts;
   const batches = chunk(pending, BATCH_SIZE);
   const merged: ResolvedMap = {};
   let done = 0;
@@ -239,7 +276,7 @@ export async function classifyPendingPatterns(opts: {
   await withConcurrency(batches, CONCURRENCY, async (batch) => {
     let labelled: ResolvedMap = {};
     try {
-      labelled = await classifyBatch(batch, apiKey);
+      labelled = await classifyBatch(batch, apiKey, userCategoryNames);
     } catch {
       labelled = {};
     }
@@ -275,6 +312,27 @@ export async function classifyPendingPatterns(opts: {
       .from("statement_uploads")
       .update({ processed_transactions: done })
       .eq("id", uploadId);
+
+    // Persist AI-classified pattern→category mappings for future instant lookups
+    if (householdId && categoryIndex) {
+      try {
+        const toSave = Object.entries(labelled)
+          .filter(([_, v]) => v.category)
+          .map(([pattern, v]) => ({
+            pattern,
+            categoryId: resolveCategoryId(v.category, categoryIndex),
+            categoryName: v.category,
+            source: 'ai' as const,
+            confidence: 0.72,
+          }))
+          .filter((e) => e.categoryId);
+        if (toSave.length) {
+          await savePatternCategories(admin, householdId, toSave);
+        }
+      } catch {
+        // Pattern persistence is non-critical
+      }
+    }
   });
 
   return merged;

@@ -3,35 +3,10 @@
  * No network calls, no AI — thousands of rows normalize in milliseconds.
  */
 
+import { DEFAULT_CATEGORY_NAMES } from "./default-category-templates";
+
 /** Canonical category list used for AI classification + dictionary entries. */
-export const PIPELINE_CATEGORIES = [
-  "Food & Dining",
-  "Groceries",
-  "Transport",
-  "Fuel",
-  "Travel",
-  "Shopping",
-  "Bills & Utilities",
-  "Housing & Rent",
-  "Health & Medical",
-  "Personal Care",
-  "Education",
-  "Kids & Family",
-  "Entertainment",
-  "Subscriptions",
-  "Insurance",
-  "Investments",
-  "Loans & EMI",
-  "Fees & Charges",
-  "Taxes",
-  "Gifts & Donations",
-  "Business",
-  "Cash & ATM",
-  "Transfers",
-  "Salary & Income",
-  "Other Income",
-  "Uncategorized",
-] as const;
+export const PIPELINE_CATEGORIES = DEFAULT_CATEGORY_NAMES;
 
 export type PipelineCategory = (typeof PIPELINE_CATEGORIES)[number];
 
@@ -156,7 +131,6 @@ const GEO_TOKENS = new Set([
   "SLC",
 ]);
 
-
 /**
  * Turn a raw bank narration into a stable, comparable merchant pattern.
  *
@@ -249,7 +223,6 @@ export function lookupKeys(pattern: string): string[] {
   if (!keys.includes(pattern)) keys.unshift(pattern);
   return keys;
 }
-
 
 /** Split an array into fixed-size chunks. */
 export function chunk<T>(items: T[], size: number): T[][] {

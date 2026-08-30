@@ -23,6 +23,8 @@ const bodySchema = z.object({
       }),
     )
     .default([]),
+  userCategoryNames: z.array(z.string()).optional(),
+  householdId: z.string().uuid().optional(),
 });
 
 export const Route = createFileRoute("/api/public/hooks/statement-classify")({
@@ -63,11 +65,29 @@ export const Route = createFileRoute("/api/public/hooks/statement-classify")({
 
         try {
           const { classifyPendingPatterns } = await import("@/lib/statement-classify.server");
+
+          // Build CategoryIndex for pattern persistence (if householdId provided)
+          let categoryIndex;
+          if (payload.householdId && payload.userCategoryNames?.length) {
+            const { buildCategoryIndex } = await import("@/lib/category-resolver");
+            // Fetch full category entries for the index
+            const { data: catRows } = await supabaseAdmin
+              .from("categories")
+              .select("id, name, kind, parent_id")
+              .eq("household_id", payload.householdId);
+            if (catRows?.length) {
+              categoryIndex = buildCategoryIndex(catRows);
+            }
+          }
+
           const classified = await classifyPendingPatterns({
             admin: supabaseAdmin,
             uploadId: payload.uploadId,
             pending: payload.pending,
             apiKey,
+            userCategoryNames: payload.userCategoryNames,
+            householdId: payload.householdId,
+            categoryIndex,
           });
 
           const resolved = { ...(result.resolved ?? {}), ...classified };

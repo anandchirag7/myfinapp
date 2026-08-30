@@ -9,7 +9,9 @@ export const getMyProfile = createServerFn({ method: "GET" })
     await getHouseholdId(context);
     const { data, error } = await (context.supabase as any)
       .from("profiles")
-      .select("id, display_name, whatsapp_number, whatsapp_reminders_enabled, default_household_id")
+      .select(
+        "id, display_name, whatsapp_number, whatsapp_reminders_enabled, default_household_id, auto_approve_threshold",
+      )
       .eq("id", context.userId)
       .maybeSingle();
     if (error) throw error;
@@ -18,17 +20,24 @@ export const getMyProfile = createServerFn({ method: "GET" })
 
 export const updateMyProfile = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((d: unknown) => z.object({
-    display_name: z.string().max(120).optional(),
-    whatsapp_number: z.string().max(30).nullable().optional(),
-    whatsapp_reminders_enabled: z.boolean().optional(),
-  }).parse(d))
+  .inputValidator((d: unknown) =>
+    z
+      .object({
+        display_name: z.string().max(120).optional(),
+        whatsapp_number: z.string().max(30).nullable().optional(),
+        whatsapp_reminders_enabled: z.boolean().optional(),
+        auto_approve_threshold: z.number().min(0).max(1).optional(),
+      })
+      .parse(d),
+  )
   .handler(async ({ context, data }) => {
     const { data: row, error } = await (context.supabase as any)
       .from("profiles")
       .update(data)
       .eq("id", context.userId)
-      .select("id, display_name, whatsapp_number, whatsapp_reminders_enabled")
+      .select(
+        "id, display_name, whatsapp_number, whatsapp_reminders_enabled, auto_approve_threshold",
+      )
       .maybeSingle();
     if (error) throw error;
     return row;
