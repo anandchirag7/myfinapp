@@ -37,3 +37,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# User statement files & personal documents
+Acct_Statement_*
+*.xls
+*.xlsx

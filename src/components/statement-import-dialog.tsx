@@ -57,6 +57,7 @@ import { useStatementClassification } from "@/hooks/use-statement-classification
 import type { StatementDetection } from "@/lib/statement-detect";
 import {
   buildClusters,
+  buildImportDiagnostics,
   clusterTxnCount,
   computeReadiness,
   mergeClusters,
@@ -449,7 +450,14 @@ export function StatementImportDialog() {
         total: txnsCount,
         detail: `${txnsCount.toLocaleString()} rows extracted`,
       });
-      setCategories(res.categories as Category[]);
+      const responseCategories = res.categories as Category[];
+      setCategories(responseCategories);
+      // Build from the response, not the previous React state. Otherwise the
+      // first cluster pass sees an empty category index.
+      const responseCategoryIdByName = new Map(
+        responseCategories.map((category) => [category.name.toLowerCase(), category.id]),
+      );
+      const responseCategoryIndex = buildCategoryIndex(responseCategories);
 
       const txns: ClusterTxn[] = res.transactions.map((t, i) => ({
         key: `t${i}`,
@@ -458,6 +466,8 @@ export function StatementImportDialog() {
         amount: t.amount,
         type: t.type,
         pattern: t.pattern || "MISC",
+        fingerprint: t.fingerprint,
+        reversal_group_id: t.reversal_group_id,
       }));
       setRawTxns(txns);
       await sleep(120);
@@ -505,9 +515,11 @@ export function StatementImportDialog() {
         transactions: txns,
         resolved,
         existingPayees: res.existingPayees,
-        categoryIdByName,
-        categoryIndex: categoryIndex ?? undefined,
+        categoryIdByName: responseCategoryIdByName,
+        categoryIndex: responseCategoryIndex,
+        patternCategoryMap: new Map(Object.entries(res.patternCategories ?? {})),
       });
+      const diagnostics = buildImportDiagnostics(built);
 
       const matchedPayees = built.filter(
         (c) => c.source === "payee" || c.source === "alias",
@@ -574,6 +586,9 @@ export function StatementImportDialog() {
         clusters: built.length,
         aiRemaining: pending,
         exceptions: built.filter((c) => c.status === "review").length,
+        categorizedTransactions: diagnostics.categorizedTransactions,
+        uncategorizedTransactions: diagnostics.uncategorizedTransactions,
+        resolutionCounts: diagnostics.resolutionCounts,
       });
 
       setClusters(built);
@@ -586,7 +601,11 @@ export function StatementImportDialog() {
       }
 
       const tReview = Date.now() - t11;
-      setStage("review", { state: "done", ms: tReview, detail: "Ready for review" });
+      setStage("review", {
+        state: "done",
+        ms: tReview,
+        detail: `${diagnostics.categorizedTransactions.toLocaleString()} of ${diagnostics.transactions.toLocaleString()} categorized`,
+      });
       setOperation("Processing complete — opening review");
 
       // Smooth 500ms transition delay so user sees all 12 stages green & checked!
@@ -625,17 +644,28 @@ export function StatementImportDialog() {
       }
 
       setActivity({
-        kind: "ok",
+        kind:
+          res.classificationStatus === "complete" || res.classificationStatus === "queued"
+            ? "ok"
+            : "error",
         label: `Parsed ${txns.length.toLocaleString()} transactions — nothing saved yet`,
         detail:
-          (pending ? `Naming ${pending} payees in the background. ` : "All payees recognised. ") +
+          (res.classificationStatus === "queued"
+            ? `Automatic classification is queued for ${pending} unresolved patterns. `
+            : res.classificationStatus !== "complete"
+              ? res.classificationStatus === "partial"
+                ? `Automatic classification completed with ${pending} unresolved patterns. `
+                : `Automatic classification failed: ${res.classificationError ?? "unknown error"}. `
+              : pending
+                ? `${pending} payees still require review. `
+                : "All payees recognised. ") +
           ((res as any).archived
             ? "The original file was archived privately for audit and re-parse."
             : "The original file was not archived (archiving is off in Settings)."),
       });
       toast.success(
         `${txns.length.toLocaleString()} transactions · ${built.length} payee clusters` +
-          (pending ? ` · naming ${pending} in the background` : " · all recognised"),
+          (pending ? ` · ${pending} need review` : " · all recognised"),
       );
       notify(
         "parsed",
@@ -1289,7 +1319,14 @@ export function StatementImportDialog() {
               categories={categories}
               accounts={accounts as Array<{ id: string; name: string }>}
               currentAccountId={accountId}
-              aiRemaining={aiRemaining}
+              aiRemaining={
+                classification.status === "complete" ||
+                classification.status === "partial" ||
+                classification.status === "failed" ||
+                classification.status === "cancelled"
+                  ? 0
+                  : aiRemaining
+              }
               polishing={polishing}
               onPolish={onPolish}
               onCategorizeRemaining={onCategorizeRemaining}

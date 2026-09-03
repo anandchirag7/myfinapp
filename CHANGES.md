@@ -2,7 +2,97 @@
 
 This file tracks all modified and newly created files along with their date of change.
 
+## 2026-09-03
+
+- Revamped Settings page with modern hero profile banner, Radix tabbed layout (General, Statement & AI, Notifications, Statement Archive, Data & Reset), visual Light/Dark theme mockups, auto-approve threshold presets, and polished notifications.
+- `src/routes/_authenticated/settings.tsx`
+- `src/lib/profile.functions.ts`
+- Added comprehensive Firefly III rules engine analysis and implementation plan.
+- `RULES_FEATURE_IMPLEMENTATION_PLAN.md`
+
+## 2026-09-02
+
+- Implemented Release A of `import_plan.md`: a native Ollama-only statement inference client with preflight, typed errors, retries, validation, telemetry, realistic batching, truthful partial states, and provider contract/failure tests.
+- Completed Release B with hard ledger reconciliation, versioned rail-aware narration fingerprints, household-scoped identifier hashes, separate transaction-type decisions, semantic merge guards, post-resolution canonical merging, reversible debit-return links, and a labelled pairwise-precision corpus.
+- `src/lib/statement-ledger.ts`
+- `src/lib/statement-fingerprint.ts`
+- `src/tests/statement-release-b.test.ts`
+- `src/tests/fixtures/statement-release-b-gold.ts`
+- `src/lib/ollama.server.ts`
+- `src/lib/statement-classify.server.ts`
+- `src/lib/statement-parse.server.ts`
+- `src/lib/statement-pipeline.server.ts`
+- `src/lib/statement-import.functions.ts`
+- `src/routes/api/public/hooks/statement-classify.ts`
+- `src/hooks/use-statement-classification.ts`
+- `src/integrations/supabase/types.ts`
+- `src/tests/ollama.test.ts`
+- `src/tests/test-runner.ts`
+- `supabase/migrations/20260902000000_statement_import_job_states.sql`
+- `CHANGES.md`
+- Started Release C with a durable PGMQ statement-classification queue, service-role queue RPCs, visibility timeout and retry metadata, an authenticated worker endpoint, idempotent enqueue keys, and a feature-flagged rollout path.
+- `supabase/migrations/20260902010000_statement_classification_queue.sql`
+- `src/lib/statement-queue.server.ts`
+- `src/routes/api/public/hooks/statement-worker.ts`
+- `src/routeTree.gen.ts`
+- Added a complete Supabase Vault, `pg_net`, and Cron setup and operations runbook for the statement worker.
+- `SUPABASE_STATEMENT_WORKER_CRON.md`
+- Completed Release C with stable category-key classification, calibrated Ollama confidence, verified pgvector entity retrieval with corroboration and negative-memory guards, structured pattern resolutions, household-only positive/negative learning, risk-based non-blocking review rules, durable queue processing, and reversible import coverage.
+- `supabase/migrations/20260902020000_release_c_resolution_memory.sql`
+- `src/lib/statement-category-keys.ts`
+- `src/lib/statement-embedding.server.ts`
+- `src/lib/statement-review-risk.ts`
+- `src/lib/statement-pipeline.functions.ts`
+- `src/tests/statement-release-c.test.ts`
+- `import_plan.md`
+- `package.json`
+- `package-lock.json`
+- Started Release D with explicit versioned Ollama consent, a business-only eligibility and hard-redaction gate, an Ollama Web Search shadow adapter, hashed positive/negative caching, hostile-result filtering, evidence scoring, and privacy regression tests.
+- `supabase/migrations/20260902030000_release_d_web_enrichment_pilot.sql`
+- `src/lib/merchant-web-enrichment.ts`
+- `src/lib/merchant-web-enrichment.server.ts`
+- `src/tests/statement-release-d.test.ts`
+- Made Release D API-key driven: `ollama-web-search` is tagged `enabled` when `OLLAMA_API_KEY` exists and `skipped_no_api_key` otherwise, without affecting local Ollama classification or embeddings.
+- Completed Release D with a versioned consent UI, provider disclosure/status, aggregate privacy and precision auditing, a labelled sanitized evaluation corpus, and the plan-approved disabled-provider fallback when no web-search API key exists.
+- `src/lib/merchant-enrichment-evaluation.ts`
+- `src/tests/fixtures/statement-release-d-gold.ts`
+- `supabase/migrations/20260902040000_release_d_enrichment_audits.sql`
+- `src/routes/_authenticated/settings.tsx`
+- `src/lib/profile.functions.ts`
+- Completed Release E with service-controlled resolver/web feature flags, deterministic household canaries, persisted shadow comparison metrics, database and deployment kill switches, staged-rollout SQL, and rollback regression tests.
+- `supabase/migrations/20260902050000_release_e_controlled_rollout.sql`
+- `src/lib/statement-rollout.ts`
+- `src/lib/statement-rollout.server.ts`
+- `src/tests/statement-release-e.test.ts`
+- `RELEASE_E_ROLLOUT.md`
+- Added malformed-JSON recovery for Ollama classification: failed batches are retried and bisected so one bad batch response cannot discard every payee classification.
+- `src/lib/batch-recovery.ts`
+- `src/tests/batch-recovery.test.ts`
+
+## 2026-09-03
+
+- Prevented local Ollama CUDA exhaustion during JSON recovery by making split batches sequential and bounding the default context window to 2,048 tokens; added optional `OLLAMA_NUM_GPU` CPU-fallback configuration.
+- `.env`
+- Stopped using the service-role client for local synchronous statement classification and household pattern learning; the authenticated session now performs those RLS-scoped writes.
+- Fixed the confirm screen so the background naming spinner stops after `complete`, `partial`, `failed`, or `cancelled` terminal states.
+- Switched statement classification back to `gpt-oss:120b-cloud` after validating the current five-pattern stable-category JSON contract through the local Ollama client; local `mxbai-embed-large` remains the embedding model.
+
 ## 2026-08-30
+
+- Added an Ollama-first, low-touch statement-import architecture and merchant-enrichment research plan based on the supplied 572-transaction regression statement.
+- `import_plan.md`
+- Added the statement-import remediation and acceptance-test plan.
+- `fixplan.md`
+- Implemented response-local category resolution, reliable awaited AI classification, household learning persistence, safer merchant normalization and lookup, import diagnostics, and sanitized regression coverage for statement import.
+- `src/components/statement-import-dialog.tsx`
+- `src/components/statement-import/parsing-timeline.tsx`
+- `src/lib/pattern-categories.functions.ts`
+- `src/lib/statement-classify.server.ts`
+- `src/lib/statement-clusters.ts`
+- `src/lib/statement-pipeline.functions.ts`
+- `src/lib/statement-pipeline.server.ts`
+- `src/routes/api/public/hooks/statement-classify.ts`
+- `src/tests/fixtures/statement-import-regression.ts`
 - Implemented the approved 98-row global category template, safe existing-household backfill, stable category keys, 319 seed merchant remaps, 6 unsafe seed removals, and 189 new global patterns.
 - Aligned import classification categories and deterministic keyword rules with the compact taxonomy while preserving legacy aliases.
 - `CATEGORY_RECONCILIATION_REVIEW_PLAN.md`
@@ -17,6 +107,7 @@ This file tracks all modified and newly created files along with their date of c
 - `CHANGES.md`
 
 ## 2026-08-29
+
 - Completed the Phase 1 statement-import auto-categorization flow with a summary-first exception review, keyword and AI bulk category assignment, one-click approval, a working auto-pilot transition, and a configurable per-user approval threshold.
 - Added review documents for the proposed default category taxonomy, existing merchant remaps, and new merchant-pattern candidates.
 - `CATEGORY_RECONCILIATION_REVIEW_PLAN.md`
@@ -30,6 +121,7 @@ This file tracks all modified and newly created files along with their date of c
 - `CHANGES.md`
 
 ## 2026-08-05
+
 - `.env`
 - `package.json`
 - `package-lock.json`
@@ -59,6 +151,7 @@ This file tracks all modified and newly created files along with their date of c
 - `CHANGES.md`
 
 ## 2026-08-25
+
 - Reimagined the dashboard as a responsive money command center with a financial pulse hero, contextual highlights, quick actions, clearer workspace controls, refined widget surfaces, and a net-worth card that fits saved and newly created layouts.
 - `src/routes/_authenticated/index.tsx`
 - `src/lib/dashboard-widgets.tsx`
@@ -67,6 +160,7 @@ This file tracks all modified and newly created files along with their date of c
 - `CHANGES.md`
 
 ## 2026-08-06
+
 - `src/lib/statement-detect.ts`
 - `src/lib/statement-parse.server.ts`
 - `src/lib/statement-import.functions.ts`
@@ -80,6 +174,7 @@ This file tracks all modified and newly created files along with their date of c
 - `CHANGES.md`
 
 ## 2026-08-15
+
 - Enhanced authentication flow with auto-confirmation and fallback for email verification in `src/routes/auth.tsx` and `src/lib/auth.functions.ts`
 - Added server-side admin user provisioning and auto-confirmation for demo account in `src/lib/demo.functions.ts`
 - Fixed invalid hook call and HeadContent useContext error by structuring RootDocument inside RootComponent and adding explicit deduplication for react, @tanstack/react-router, and @tanstack/react-start in vite.config.ts
@@ -121,6 +216,7 @@ This file tracks all modified and newly created files along with their date of c
 - `CHANGES.md`
 
 ## 2026-08-18
+
 - Fixed `Uncaught TypeError: import_browser_external_node_async_hooks.AsyncLocalStorage is not a constructor` by removing `@tanstack/react-start` from Vite browser `optimizeDeps.include` to prevent server context modules from being bundled into client builds
 - Fixed `Cannot read properties of null (reading 'useContext')` and `Invalid hook call` in `<AuthPage>` and other route components by replacing raw `Route.useSearch()`, `Route.useParams()`, and `Route.useRouteContext()` with TanStack Router hooks (`useSearch({ strict: false })`, `useParams({ strict: false })`, `useRouteContext({ strict: false })`)
 - `src/routes/auth.tsx`
@@ -185,6 +281,7 @@ This file tracks all modified and newly created files along with their date of c
 - `CHANGES.md`
 
 ## 2026-08-18
+
 - Fixed `Uncaught TypeError: import_browser_external_node_async_hooks.AsyncLocalStorage is not a constructor` by excluding server-only `@tanstack/react-start` packages from browser `optimizeDeps` while bundling `@tanstack/react-router`, `@tanstack/react-query`, and React to ensure a unified singleton instance without Node.js `async_hooks` leaks
 - Fixed `Invalid hook call` and `Cannot read properties of null (reading 'useContext')` by configuring `optimizeDeps.include` in `vite.config.ts` to bundle `@tanstack/react-router` and `@tanstack/react-query` with React, preventing shallow CJS interop copy of React namespace
 - Stabilized `QueryClientProvider` fallback client instantiation inside `src/routes/__root.tsx` using `useState`
@@ -228,6 +325,7 @@ This file tracks all modified and newly created files along with their date of c
 - `CHANGES.md`
 
 ## 2026-08-24
+
 - Fixed app boot issue where `src/App.tsx` was returning an empty container by properly wiring `RouterProvider` with `getRouter()` and enabling dual client-SPA/SSR document mounting in `src/routes/__root.tsx`
 - Cleaned up leftover `temp_repo` and `speedy-finance-friend-dev1` temporary directories for a clean workspace structure
 - `src/App.tsx`

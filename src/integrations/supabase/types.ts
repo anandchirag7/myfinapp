@@ -1022,6 +1022,50 @@ export type Database = {
           },
         ];
       };
+      merchant_enrichment_cache: {
+        Row: {
+          created_at: string;
+          evidence: Json;
+          expires_at: string;
+          household_id: string;
+          id: string;
+          provider: string;
+          query_hash: string;
+          status: string;
+          updated_at: string;
+        };
+        Insert: {
+          created_at?: string;
+          evidence?: Json;
+          expires_at: string;
+          household_id: string;
+          id?: string;
+          provider: string;
+          query_hash: string;
+          status: string;
+          updated_at?: string;
+        };
+        Update: {
+          created_at?: string;
+          evidence?: Json;
+          expires_at?: string;
+          household_id?: string;
+          id?: string;
+          provider?: string;
+          query_hash?: string;
+          status?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "merchant_enrichment_cache_household_id_fkey";
+            columns: ["household_id"];
+            isOneToOne: false;
+            referencedRelation: "households";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
       memorized_payees: {
         Row: {
           account_id: string | null;
@@ -1468,6 +1512,9 @@ export type Database = {
           import_email_notifications: boolean;
           notification_email: string | null;
           number_format: string;
+          statement_web_enrichment_consent_at: string | null;
+          statement_web_enrichment_notice_version: string | null;
+          statement_web_enrichment_provider: string | null;
           updated_at: string;
           use_lakh_crore: boolean;
           whatsapp_number: string | null;
@@ -1484,6 +1531,9 @@ export type Database = {
           import_email_notifications?: boolean;
           notification_email?: string | null;
           number_format?: string;
+          statement_web_enrichment_consent_at?: string | null;
+          statement_web_enrichment_notice_version?: string | null;
+          statement_web_enrichment_provider?: string | null;
           updated_at?: string;
           use_lakh_crore?: boolean;
           whatsapp_number?: string | null;
@@ -1500,6 +1550,9 @@ export type Database = {
           import_email_notifications?: boolean;
           notification_email?: string | null;
           number_format?: string;
+          statement_web_enrichment_consent_at?: string | null;
+          statement_web_enrichment_notice_version?: string | null;
+          statement_web_enrichment_provider?: string | null;
           updated_at?: string;
           use_lakh_crore?: boolean;
           whatsapp_number?: string | null;
@@ -1689,19 +1742,118 @@ export type Database = {
           },
         ];
       };
+      statement_feature_rollouts: {
+        Row: {
+          enabled: boolean;
+          feature: string;
+          rollback: boolean;
+          rollout_percent: number;
+          shadow: boolean;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: {
+          enabled?: boolean;
+          feature: string;
+          rollback?: boolean;
+          rollout_percent?: number;
+          shadow?: boolean;
+          updated_at?: string;
+          updated_by?: string | null;
+        };
+        Update: {
+          enabled?: boolean;
+          feature?: string;
+          rollback?: boolean;
+          rollout_percent?: number;
+          shadow?: boolean;
+          updated_at?: string;
+          updated_by?: string | null;
+        };
+        Relationships: [];
+      };
+      statement_rollout_metrics: {
+        Row: {
+          active: boolean;
+          baseline_resolved: number;
+          blocking_count: number;
+          candidate_resolved: number;
+          created_at: string;
+          failure_count: number;
+          feature: string;
+          household_id: string;
+          id: number;
+          resolver_version: string;
+          shadow: boolean;
+          upload_id: string;
+        };
+        Insert: {
+          active: boolean;
+          baseline_resolved?: number;
+          blocking_count?: number;
+          candidate_resolved?: number;
+          created_at?: string;
+          failure_count?: number;
+          feature: string;
+          household_id: string;
+          id?: never;
+          resolver_version: string;
+          shadow: boolean;
+          upload_id: string;
+        };
+        Update: {
+          active?: boolean;
+          baseline_resolved?: number;
+          blocking_count?: number;
+          candidate_resolved?: number;
+          created_at?: string;
+          failure_count?: number;
+          feature?: string;
+          household_id?: string;
+          id?: never;
+          resolver_version?: string;
+          shadow?: boolean;
+          upload_id?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "statement_rollout_metrics_household_id_fkey";
+            columns: ["household_id"];
+            isOneToOne: false;
+            referencedRelation: "households";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "statement_rollout_metrics_upload_id_fkey";
+            columns: ["upload_id"];
+            isOneToOne: false;
+            referencedRelation: "statement_uploads";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
       statement_uploads: {
         Row: {
           archive_expires_at: string | null;
           created_at: string;
+          current_attempt: number;
+          current_batch: number;
           error: string | null;
+          failed_patterns: number;
           filename: string;
           household_id: string | null;
+          heartbeat_at: string | null;
           id: string;
+          idempotency_key: string | null;
           import_token: string | null;
           imported_at: string | null;
           inserted_count: number;
           mime_type: string | null;
+          model: string | null;
+          next_retry_at: string | null;
           processed_transactions: number;
+          provider: string | null;
+          resolver_version: string | null;
           result: Json;
           size_bytes: number | null;
           status: Database["public"]["Enums"]["statement_upload_status"];
@@ -1709,20 +1861,30 @@ export type Database = {
           total_transactions: number;
           unique_patterns: number;
           updated_at: string;
+          last_progress_at: string | null;
           user_id: string;
         };
         Insert: {
           archive_expires_at?: string | null;
           created_at?: string;
+          current_attempt?: number;
+          current_batch?: number;
           error?: string | null;
+          failed_patterns?: number;
           filename: string;
           household_id?: string | null;
+          heartbeat_at?: string | null;
           id?: string;
+          idempotency_key?: string | null;
           import_token?: string | null;
           imported_at?: string | null;
           inserted_count?: number;
           mime_type?: string | null;
+          model?: string | null;
+          next_retry_at?: string | null;
           processed_transactions?: number;
+          provider?: string | null;
+          resolver_version?: string | null;
           result?: Json;
           size_bytes?: number | null;
           status?: Database["public"]["Enums"]["statement_upload_status"];
@@ -1730,20 +1892,30 @@ export type Database = {
           total_transactions?: number;
           unique_patterns?: number;
           updated_at?: string;
+          last_progress_at?: string | null;
           user_id: string;
         };
         Update: {
           archive_expires_at?: string | null;
           created_at?: string;
+          current_attempt?: number;
+          current_batch?: number;
           error?: string | null;
+          failed_patterns?: number;
           filename?: string;
           household_id?: string | null;
+          heartbeat_at?: string | null;
           id?: string;
+          idempotency_key?: string | null;
           import_token?: string | null;
           imported_at?: string | null;
           inserted_count?: number;
           mime_type?: string | null;
+          model?: string | null;
+          next_retry_at?: string | null;
           processed_transactions?: number;
+          provider?: string | null;
+          resolver_version?: string | null;
           result?: Json;
           size_bytes?: number | null;
           status?: Database["public"]["Enums"]["statement_upload_status"];
@@ -1751,6 +1923,7 @@ export type Database = {
           total_transactions?: number;
           unique_patterns?: number;
           updated_at?: string;
+          last_progress_at?: string | null;
           user_id?: string;
         };
         Relationships: [
@@ -2141,7 +2314,17 @@ export type Database = {
         | "other";
       app_role: "admin" | "member";
       merchant_confidence_source: "seed" | "ai_classified" | "user_confirmed";
-      statement_upload_status: "parsing" | "deduplicating" | "classifying" | "complete" | "failed";
+      statement_upload_status:
+        | "parsing"
+        | "deduplicating"
+        | "classifying"
+        | "queued"
+        | "running"
+        | "partial"
+        | "retrying"
+        | "complete"
+        | "failed"
+        | "cancelled";
       txn_type: "income" | "expense" | "transfer";
     };
     CompositeTypes: {
@@ -2285,7 +2468,18 @@ export const Constants = {
       ],
       app_role: ["admin", "member"],
       merchant_confidence_source: ["seed", "ai_classified", "user_confirmed"],
-      statement_upload_status: ["parsing", "deduplicating", "classifying", "complete", "failed"],
+      statement_upload_status: [
+        "parsing",
+        "deduplicating",
+        "classifying",
+        "queued",
+        "running",
+        "partial",
+        "retrying",
+        "complete",
+        "failed",
+        "cancelled",
+      ],
       txn_type: ["income", "expense", "transfer"],
     },
   },

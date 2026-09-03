@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { getHouseholdId } from "@/lib/household.server";
+import { createOllamaClient } from "./ollama.server";
 import {
   extractRowsFromAOA,
   parsePdfWithAI,
@@ -438,25 +439,12 @@ export const inspectStatementWithAI = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => inspectAiInput.parse(d))
   .handler(async ({ data }) => {
-    const apiKey = process.env.LOVABLE_API_KEY;
-    const baseURL = process.env.OLLAMA_BASE_URL || "https://ai.gateway.lovable.dev/v1";
-    const model = process.env.OLLAMA_MODEL || "google/gemini-2.5-flash";
-
-    if (!apiKey && !process.env.OLLAMA_BASE_URL) return null;
-
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (apiKey) headers["Lovable-API-Key"] = apiKey;
-
     try {
-      const res = await fetch(`${baseURL}/chat/completions`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          model,
-          messages: [
-            {
-              role: "system",
-              content: `You are an expert financial document parser. Analyze the provided bank or credit card statement content (file name and raw sample text) and extract statement metadata.
+      const response = await createOllamaClient().chat(
+        [
+          {
+            role: "system",
+            content: `You are an expert financial document parser. Analyze the provided bank or credit card statement content (file name and raw sample text) and extract statement metadata.
 Return ONLY a valid JSON object matching this exact schema without markdown wrap or extra commentary:
 {
   "bank": string or null (e.g. "HDFC Bank", "ICICI Bank", "State Bank of India", "Axis Bank", "Kotak Mahindra", "American Express", "Citibank", "IDFC First", "Yes Bank", "IndusInd", "HSBC", "Standard Chartered"),
@@ -470,27 +458,16 @@ Rules:
 - Search for dates in headers, titles, or date columns (e.g. "01/04/2024 to 30/04/2024", "Statement Date: 15-May-2024").
 - Standardize all dates to YYYY-MM-DD format.
 - If bank name is obvious from header or filename, use standard commercial bank name.`,
-            },
-            {
-              role: "user",
-              content: `Filename: ${data.fileName}\nContent Sample:\n${data.sampleText.slice(0, 6000)}`,
-            },
-          ],
-          response_format: { type: "json_object" },
-        }),
-      });
-
-      if (!res.ok)
-        return {
-          bank: null,
-          currency: null,
-          periodStart: null,
-          periodEnd: null,
-          estimatedRows: null,
-        };
-      const json = await res.json();
-      const text = json.choices?.[0]?.message?.content ?? "";
-      let parsed = salvageJson(text) ?? (typeof json === "object" ? json : null);
+          },
+          {
+            role: "user",
+            content: `Filename: ${data.fileName}\nContent Sample:\n${data.sampleText.slice(0, 6000)}`,
+          },
+        ],
+        { format: "json", temperature: 0, numPredict: 500 },
+      );
+      const text = response.message?.content ?? "";
+      let parsed = salvageJson(text);
 
       if (typeof parsed === "string") {
         parsed = salvageJson(parsed);
@@ -611,9 +588,7 @@ export const extractStatementRows = createServerFn({ method: "POST" })
       }
       extracted = extractRowsFromAOA(aoa);
     } else if (isPdf) {
-      const apiKey = process.env.LOVABLE_API_KEY;
-      if (!apiKey && !process.env.OLLAMA_BASE_URL)
-        throw new Error("Missing LOVABLE_API_KEY or OLLAMA_BASE_URL");
+      await createOllamaClient().preflight();
       const categoryList = (cats ?? []).map((c: any) => c.name).join(", ");
       const { transactions } = await parsePdfWithAI(
         data.base64,
@@ -621,7 +596,6 @@ export const extractStatementRows = createServerFn({ method: "POST" })
         data.bank,
         categoryList,
         existingPayees.map((p: any) => p.merchant).join(", "),
-        apiKey,
       );
       extracted = transactions;
     } else {
@@ -717,29 +691,15 @@ export const polishPayeeNames = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => polishInput.parse(d))
   .handler(async ({ data }) => {
-    const apiKey = process.env.LOVABLE_API_KEY;
-    const baseURL = process.env.OLLAMA_BASE_URL || "https://ai.gateway.lovable.dev/v1";
-    const model = process.env.OLLAMA_MODEL || "google/gemini-2.5-flash";
-
-    if (!apiKey && !process.env.OLLAMA_BASE_URL)
-      throw new Error("Missing LOVABLE_API_KEY or OLLAMA_BASE_URL");
-
     const lines = data.clusters
       .map((c, i) => `${i}| ${c.name} | ${c.count} txns | e.g. ${c.sample.slice(0, 120)}`)
       .join("\n");
 
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (apiKey) headers["Lovable-API-Key"] = apiKey;
-
-    const res = await fetch(`${baseURL}/chat/completions`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        model,
-        messages: [
-          {
-            role: "system",
-            content: `You clean up merchant/payee names extracted from Indian bank statements.
+    const response = await createOllamaClient().chat(
+      [
+        {
+          role: "system",
+          content: `You clean up merchant/payee names extracted from Indian bank statements.
 Input lines: "index| current name | txn count | e.g. raw narration".
 Return ONLY JSON:
 { "renames": { "<index>": "Proper Merchant Name" }, "merges": [[<index>, <index>, ...]] }
@@ -749,16 +709,12 @@ Rules:
 - Only include an index in "renames" if the name actually improves.
 - Put indexes that are clearly the SAME merchant into a merges group; keep merges conservative.
 - Never invent merchants that are not implied by the input.`,
-          },
-          { role: "user", content: lines },
-        ],
-        response_format: { type: "json_object" },
-        max_tokens: 8000,
-      }),
-    });
-    if (!res.ok) throw new Error(`AI gateway failed [${res.status}]`);
-    const j = await res.json();
-    const content: string = j.choices?.[0]?.message?.content ?? "{}";
+        },
+        { role: "user", content: lines },
+      ],
+      { format: "json", temperature: 0, numPredict: 8000 },
+    );
+    const content = response.message?.content ?? "{}";
     let parsed: any;
     try {
       parsed = JSON.parse(content);
@@ -814,42 +770,26 @@ export const categorizePayeeClusters = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => categorizeClustersInput.parse(d))
   .handler(async ({ data }) => {
-    const apiKey = process.env.LOVABLE_API_KEY;
-    const baseURL = process.env.OLLAMA_BASE_URL || "https://ai.gateway.lovable.dev/v1";
-    const model = process.env.OLLAMA_MODEL || "google/gemini-2.5-flash";
-
-    if (!apiKey && !process.env.OLLAMA_BASE_URL) {
-      throw new Error("Missing LOVABLE_API_KEY or OLLAMA_BASE_URL");
-    }
-
     const lines = data.clusters
       .map((cluster, index) => `${index}| ${cluster.name} | ${cluster.sample.slice(0, 180)}`)
       .join("\n");
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (apiKey) headers["Lovable-API-Key"] = apiKey;
-
-    const res = await fetch(`${baseURL}/chat/completions`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        model,
-        messages: [
-          {
-            role: "system",
-            content: `Categorize Indian bank-statement payees. Choose exactly one category from this list for every input: ${data.categoryNames.join(", ")}.
+    const response = await createOllamaClient().chat(
+      [
+        {
+          role: "system",
+          content: `Categorize Indian bank-statement payees. Choose exactly one category from this list for every input: ${data.categoryNames.join(", ")}.
 Return ONLY JSON in this shape: { "categories": { "<index>": "<exact category name>" } }.
 Do not invent category names. Use the payee and raw narration together. If uncertain, choose the closest broad category from the list.`,
-          },
-          { role: "user", content: lines },
-        ],
-        response_format: { type: "json_object" },
-        max_tokens: Math.min(8000, Math.max(1200, data.clusters.length * 24)),
-      }),
-    });
-    if (!res.ok) throw new Error(`AI gateway failed [${res.status}]`);
-
-    const json = await res.json();
-    const content: string = json.choices?.[0]?.message?.content ?? "{}";
+        },
+        { role: "user", content: lines },
+      ],
+      {
+        format: "json",
+        temperature: 0,
+        numPredict: Math.min(8000, Math.max(1200, data.clusters.length * 24)),
+      },
+    );
+    const content = response.message?.content ?? "{}";
     let parsed: any;
     try {
       parsed = JSON.parse(content);

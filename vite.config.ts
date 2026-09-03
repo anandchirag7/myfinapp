@@ -2,13 +2,14 @@ import path from "node:path";
 import { defineConfig } from "@lovable.dev/vite-tanstack-config";
 import { mcpPlugin } from "@lovable.dev/mcp-js/stacks/tanstack/vite";
 
-export default defineConfig({
+const baseConfig = defineConfig({
   tanstackStart: {
     // Redirect TanStack Start's bundled server entry to src/server.ts (our SSR error wrapper).
     server: { entry: "server" },
   },
   vite: {
     resolve: {
+      tsconfigPaths: true,
       alias: {
         "@": path.resolve(process.cwd(), "./src"),
         "#tanstack-router-entry": path.resolve(process.cwd(), "./src/router.tsx"),
@@ -57,3 +58,15 @@ export default defineConfig({
     plugins: process.platform === "win32" ? [] : [mcpPlugin()],
   },
 });
+
+export default async (env: Parameters<typeof baseConfig>[0]) => {
+  const config = await baseConfig(env);
+  if (config.plugins) {
+    config.plugins = (config.plugins as any[])
+      .flat(Infinity)
+      .filter(
+        (p) => !p || typeof p !== "object" || !("name" in p) || p.name !== "vite-tsconfig-paths",
+      );
+  }
+  return config;
+};

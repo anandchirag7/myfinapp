@@ -1,9 +1,9 @@
 /**
  * Background worker for statement payee classification.
  *
- * Invoked as a detached request by the upload pipeline so AI batching keeps
- * running after the user's upload request has already returned (and even if
- * the tab is closed). Authenticated by the single-use job token stored on the
+ * Compatibility endpoint for queued or retried classification jobs. The
+ * primary upload path now awaits the same classifier directly. Authenticated
+ * by the single-use job token stored on the
  * `statement_uploads` row — no session, no service key from the caller.
  */
 
@@ -54,16 +54,9 @@ export const Route = createFileRoute("/api/public/hooks/statement-classify")({
           return new Response("ok");
         }
 
-        const apiKey = process.env['LOVABLE_API_KEY'];
-        if (!apiKey) {
-          await supabaseAdmin
-            .from("statement_uploads")
-            .update({ status: "failed", error: "Missing AI credentials" })
-            .eq("id", payload.uploadId);
-          return new Response("Missing AI credentials", { status: 500 });
-        }
-
         try {
+          const { createOllamaClient } = await import("@/lib/ollama.server");
+          await createOllamaClient().preflight();
           const { classifyPendingPatterns } = await import("@/lib/statement-classify.server");
 
           // Build CategoryIndex for pattern persistence (if householdId provided)
@@ -84,19 +77,26 @@ export const Route = createFileRoute("/api/public/hooks/statement-classify")({
             admin: supabaseAdmin,
             uploadId: payload.uploadId,
             pending: payload.pending,
-            apiKey,
             userCategoryNames: payload.userCategoryNames,
             householdId: payload.householdId,
             categoryIndex,
           });
 
-          const resolved = { ...(result.resolved ?? {}), ...classified };
+          const resolved = { ...(result.resolved ?? {}), ...classified.resolved };
           await supabaseAdmin
             .from("statement_uploads")
             .update({
-              status: "complete",
+              status: classified.diagnostics.failedPatterns.length ? "partial" : "complete",
               processed_transactions: Object.keys(resolved).length,
-              result: { ...result, resolved, pending: [] },
+              error: classified.diagnostics.failedPatterns.length
+                ? `${classified.diagnostics.failedPatterns.length} patterns remain unresolved`
+                : null,
+              result: {
+                ...result,
+                resolved,
+                pending: classified.diagnostics.failedPatterns,
+                classification: classified.diagnostics,
+              },
             })
             .eq("id", payload.uploadId);
 

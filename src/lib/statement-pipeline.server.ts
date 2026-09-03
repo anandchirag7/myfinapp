@@ -12,13 +12,36 @@ import { normalizePattern } from "./statement-normalize";
 import { extractRowsFromAOA, parsePdfWithAI, type ExtractedTxn } from "./statement-parse.server";
 import { resolveFromLookups, type ResolvedMap } from "./statement-classify.server";
 import { lookupPatternCategories } from "./pattern-categories.functions";
-import { buildCategoryIndex } from "./category-resolver";
+import { buildCategoryIndex, resolveCategoryId } from "./category-resolver";
+import {
+  extractLedgerControls,
+  reconcileLedger,
+  type LedgerControlTotals,
+  type LedgerReconciliation,
+} from "./statement-ledger";
+import {
+  linkReversalGroups,
+  parseNarrationFingerprint,
+  transactionTypeForFingerprint,
+  type NarrationFingerprint,
+} from "./statement-fingerprint";
 
 import { getHouseholdId as getHhId } from "@/lib/household.server";
 
-export type PipelineTxn = ExtractedTxn & { pattern: string };
+export type PipelineTxn = ExtractedTxn & {
+  pattern: string;
+  fingerprint: NarrationFingerprint;
+  reversal_group_id?: string;
+};
+type ParsedStatement = { transactions: ExtractedTxn[]; controls: LedgerControlTotals | null };
 
-export type PendingPattern = { pattern: string; samples: string[]; type: string; count: number };
+export type PendingPattern = {
+  pattern: string;
+  samples: string[];
+  type: string;
+  count: number;
+  counterpartyKind?: string;
+};
 
 async function getHouseholdId(supabase: any, userId: string): Promise<string> {
   return getHhId({ supabase, userId });
@@ -28,7 +51,7 @@ async function parseFile(
   supabase: any,
   householdId: string,
   input: { bank: string; fileName: string; mimeType: string; base64: string },
-): Promise<ExtractedTxn[]> {
+): Promise<ParsedStatement> {
   const lower = input.fileName.toLowerCase();
   const isPdf = input.mimeType === "application/pdf" || lower.endsWith(".pdf");
   const isExcel =
@@ -43,9 +66,8 @@ async function parseFile(
   if (isOfx || isQif) {
     const { parseOfx, parseQif } = await import("./statement-parse-ofx.server");
     const text = Buffer.from(input.base64, "base64").toString("utf-8");
-    return isOfx ? parseOfx(text) : parseQif(text);
+    return { transactions: isOfx ? parseOfx(text) : parseQif(text), controls: null };
   }
-
 
   if (isExcel) {
     const XLSX = await import("xlsx");
@@ -57,9 +79,9 @@ async function parseFile(
         blankrows: false,
       }) as any[][];
       const rows = extractRowsFromAOA(aoa);
-      if (rows.length) return rows;
+      if (rows.length) return { transactions: rows, controls: extractLedgerControls(aoa) };
     }
-    return [];
+    return { transactions: [], controls: null };
   }
 
   if (isCsv) {
@@ -71,12 +93,12 @@ async function parseFile(
       raw: true,
       blankrows: false,
     }) as any[][];
-    return extractRowsFromAOA(aoa);
+    return { transactions: extractRowsFromAOA(aoa), controls: extractLedgerControls(aoa) };
   }
 
   if (isPdf) {
-    const apiKey = process.env['LOVABLE_API_KEY'];
-    if (!apiKey && !process.env.OLLAMA_BASE_URL) throw new Error("Missing LOVABLE_API_KEY or OLLAMA_BASE_URL");
+    const { createOllamaClient } = await import("./ollama.server");
+    await createOllamaClient().preflight();
     const { data: cats } = await supabase
       .from("categories")
       .select("name")
@@ -87,9 +109,8 @@ async function parseFile(
       input.bank,
       (cats ?? []).map((c: any) => c.name).join(", "),
       "",
-      apiKey,
     );
-    return transactions;
+    return { transactions, controls: null };
   }
 
   throw new Error("Unsupported file type. Upload CSV, XLS, XLSX, PDF, OFX or QIF.");
@@ -103,6 +124,10 @@ export type UploadResult = {
   pending: PendingPattern[];
   categories: Array<{ id: string; name: string; kind: string; parent_id: string | null }>;
   existingPayees: Array<{ id: string; merchant: string; category_id: string | null }>;
+  patternCategories: Record<string, string>;
+  classificationStatus: "queued" | "complete" | "partial" | "failed";
+  classificationError: string | null;
+  ledger: LedgerReconciliation;
   archived: boolean;
 };
 
@@ -116,6 +141,9 @@ export async function runStatementUpload(opts: {
 }): Promise<UploadResult> {
   const { supabase, userId, input, origin } = opts;
   const householdId = await getHouseholdId(supabase, userId);
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const { loadStatementRollouts } = await import("./statement-rollout.server");
+  const rollout = await loadStatementRollouts(supabaseAdmin, householdId);
   const jobToken = crypto.randomUUID();
   const importToken = crypto.randomUUID();
 
@@ -169,7 +197,6 @@ export async function runStatementUpload(opts: {
     }
   }
 
-
   const fail = async (message: string) => {
     await supabase
       .from("statement_uploads")
@@ -178,32 +205,65 @@ export async function runStatementUpload(opts: {
   };
 
   try {
-    const extracted = await parseFile(supabase, householdId, input);
+    const parsed = await parseFile(supabase, householdId, input);
+    const extracted = parsed.transactions;
     if (!extracted.length) throw new Error("No transactions found in this file.");
+    const ledger = reconcileLedger(extracted, parsed.controls);
+    if (parsed.controls && !ledger.reconciled) {
+      throw new Error(`Statement ledger validation failed: ${ledger.errors.join("; ")}`);
+    }
 
     await supabase
       .from("statement_uploads")
       .update({ status: "deduplicating", total_transactions: extracted.length })
       .eq("id", uploadId);
 
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("display_name")
+      .eq("id", userId)
+      .maybeSingle();
+    const accountHolderTokens = String(profile?.display_name ?? "")
+      .split(/\s+/)
+      .filter((token) => token.length > 2);
+
     // Normalize + dedupe
-    const transactions: PipelineTxn[] = extracted.map((t) => ({
-      ...t,
-      pattern: normalizePattern(t.description),
-    }));
+    const transactions: PipelineTxn[] = await Promise.all(
+      extracted.map(async (t) => {
+        const pattern = normalizePattern(t.description);
+        return {
+          ...t,
+          pattern,
+          fingerprint: await parseNarrationFingerprint({
+            raw: t.description,
+            direction: t.type === "income" ? "credit" : "debit",
+            bankFormat: input.bank,
+            scopeSalt: householdId,
+            normalizedPattern: pattern,
+            accountHolderTokens,
+          }),
+        };
+      }),
+    );
+    for (const transaction of transactions) {
+      transaction.type = transactionTypeForFingerprint(transaction.fingerprint);
+    }
+    linkReversalGroups(transactions);
 
     const groups = new Map<string, PendingPattern>();
     for (const t of transactions) {
       const g = groups.get(t.pattern);
       if (g) {
         g.count += 1;
-        if (g.samples.length < 3 && !g.samples.includes(t.description)) g.samples.push(t.description);
+        if (g.samples.length < 3 && !g.samples.includes(t.description))
+          g.samples.push(t.description);
       } else {
         groups.set(t.pattern, {
           pattern: t.pattern,
           samples: [t.description],
           type: t.type,
           count: 1,
+          counterpartyKind: t.fingerprint.counterpartyKind,
         });
       }
     }
@@ -220,11 +280,27 @@ export async function runStatementUpload(opts: {
         .select("id, merchant, category_id, aliases")
         .eq("household_id", householdId),
     ]);
-    const categories = (cats ?? []) as Array<{ id: string; name: string; kind: string; parent_id: string | null }>;
+    const categories = (cats ?? []) as Array<{
+      id: string;
+      name: string;
+      kind: string;
+      parent_id: string | null;
+    }>;
     const userCategoryNames = categories.map((c) => c.name);
 
     // Resolve with pattern-level category lookups
-    const { resolved, unresolved } = await resolveFromLookups(supabase, userId, patterns, householdId);
+    const { resolved, unresolved } = await resolveFromLookups(
+      supabase,
+      userId,
+      patterns,
+      householdId,
+      rollout.resolver.active,
+    );
+    let shadowCandidateResolved = Object.keys(resolved).length;
+    if (rollout.resolver.shadow && !rollout.resolver.active) {
+      const shadowResult = await resolveFromLookups(supabase, userId, patterns, householdId, true);
+      shadowCandidateResolved = Object.keys(shadowResult.resolved).length;
+    }
 
     // Also fetch pattern-level category UUIDs for clusters
     const patternCatMap = await lookupPatternCategories(supabase, householdId, patterns);
@@ -238,6 +314,9 @@ export async function runStatementUpload(opts: {
     }
 
     const pending = unresolved.map((p) => groups.get(p)!).filter(Boolean);
+    const patternCategories = Object.fromEntries(
+      Array.from(patternCatMap, ([pattern, info]) => [pattern, info.categoryId]),
+    );
 
     const needsAi = pending.length > 0;
     await supabase
@@ -250,18 +329,148 @@ export async function runStatementUpload(opts: {
           job_token: jobToken,
           resolved,
           pending: pending.map((p) => p.pattern),
+          ledger,
         },
       })
       .eq("id", uploadId);
 
-    if (needsAi) {
-      // Detached invocation: keeps working even if the user closes the tab.
-      // Now includes user's category names and householdId for pattern persistence.
-      void fetch(`${origin}/api/public/hooks/statement-classify`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ uploadId, jobToken, pending, userCategoryNames, householdId }),
-      }).catch(() => undefined);
+    let classificationStatus: "queued" | "complete" | "partial" | "failed" = "complete";
+    let classificationError: string | null = null;
+    let remainingPending = pending;
+
+    // An unawaited self-fetch is not durable in serverless runtimes. Complete
+    // classification inside this request so every pattern has a final state.
+    if (needsAi && process.env.STATEMENT_QUEUE_ENABLED === "true") {
+      const { enqueueStatementClassification, STATEMENT_RESOLVER_VERSION } =
+        await import("./statement-queue.server");
+      const digest = await crypto.subtle.digest(
+        "SHA-256",
+        new TextEncoder().encode(`${uploadId}\u0000${patterns.sort().join("\u0000")}`),
+      );
+      const fingerprint = Array.from(new Uint8Array(digest).slice(0, 16), (byte) =>
+        byte.toString(16).padStart(2, "0"),
+      ).join("");
+      const idempotencyKey = `${uploadId}:${STATEMENT_RESOLVER_VERSION}:${fingerprint}`;
+      await (supabaseAdmin as any)
+        .from("statement_uploads")
+        .update({
+          status: "queued",
+          resolver_version: STATEMENT_RESOLVER_VERSION,
+          provider: "ollama",
+          model: process.env.OLLAMA_MODEL ?? null,
+          idempotency_key: idempotencyKey,
+          failed_patterns: 0,
+          current_attempt: 0,
+          heartbeat_at: new Date().toISOString(),
+        })
+        .eq("id", uploadId);
+      await enqueueStatementClassification(supabaseAdmin, {
+        uploadId,
+        userId,
+        householdId,
+        pending,
+        userCategoryNames,
+        idempotencyKey,
+        resolverVersion: STATEMENT_RESOLVER_VERSION,
+        rollout: {
+          resolverActive: rollout.resolver.active,
+          resolverShadow: rollout.resolver.shadow,
+          webActive: rollout.web.active,
+          webShadow: rollout.web.shadow,
+          baselineResolved: Object.keys(resolved).length,
+          shadowCandidateResolved,
+        },
+      });
+      classificationStatus = "queued";
+    } else if (needsAi) {
+      try {
+        const { createOllamaClient } = await import("./ollama.server");
+        await createOllamaClient().preflight();
+        const { classifyPendingPatterns } = await import("./statement-classify.server");
+        const classified = await classifyPendingPatterns({
+          // Local/synchronous imports already carry the authenticated user
+          // session. Using it avoids requiring a service-role key for normal
+          // household-scoped progress and learning writes.
+          admin: supabase,
+          uploadId,
+          userId,
+          pending,
+          userCategoryNames,
+          householdId,
+          categoryIndex,
+          webEnrichmentEnabled: rollout.web.active,
+        });
+        Object.assign(resolved, classified.resolved);
+        const failedSet = new Set(classified.diagnostics.failedPatterns);
+        remainingPending = pending.filter((item) => failedSet.has(item.pattern));
+        if (remainingPending.length) classificationStatus = "partial";
+
+        await supabase
+          .from("statement_uploads")
+          .update({
+            status: remainingPending.length ? "partial" : "complete",
+            processed_transactions: Object.keys(resolved).length,
+            error: remainingPending.length
+              ? `${remainingPending.length} patterns remain unresolved`
+              : null,
+            result: {
+              job_token: jobToken,
+              resolved,
+              pending: classified.diagnostics.failedPatterns,
+              classification: classified.diagnostics,
+              rollout,
+              ledger,
+            },
+          })
+          .eq("id", uploadId);
+      } catch (error: any) {
+        classificationStatus = "failed";
+        classificationError = String(error?.message ?? error).slice(0, 500);
+        await supabase
+          .from("statement_uploads")
+          .update({
+            status: "failed",
+            error: classificationError,
+            result: {
+              job_token: jobToken,
+              resolved,
+              pending: pending.map((item) => item.pattern),
+              ledger,
+            },
+          })
+          .eq("id", uploadId);
+      }
+    }
+
+    if (classificationStatus !== "queued") {
+      const { recordStatementRolloutMetric } = await import("./statement-rollout.server");
+      const baselineResolved = patterns.length - pending.length;
+      const candidateResolved = Math.max(Object.keys(resolved).length, shadowCandidateResolved);
+      const blockingCount = remainingPending.length;
+      await Promise.all([
+        recordStatementRolloutMetric(supabase, {
+          householdId,
+          uploadId,
+          feature: "resolver_v2",
+          active: rollout.resolver.active,
+          shadow: rollout.resolver.shadow,
+          baselineResolved,
+          candidateResolved,
+          blockingCount,
+          failures: classificationStatus === "failed" ? blockingCount : 0,
+        }),
+        recordStatementRolloutMetric(supabase, {
+          householdId,
+          uploadId,
+          feature: "web_enrichment",
+          active: rollout.web.active,
+          shadow: rollout.web.shadow,
+          baselineResolved,
+          candidateResolved,
+          blockingCount,
+          failures: 0,
+        }),
+      ]);
     }
 
     return {
@@ -270,11 +479,14 @@ export async function runStatementUpload(opts: {
       archived,
       transactions,
       resolved,
-      pending,
+      pending: remainingPending,
       categories: categories as any,
       existingPayees: (payeeRows ?? []) as any,
+      patternCategories,
+      classificationStatus,
+      classificationError,
+      ledger,
     };
-
   } catch (e: any) {
     await fail(e?.message ?? "Statement processing failed");
     throw e;
@@ -297,7 +509,8 @@ export async function reparseStatement(opts: {
     .eq("id", uploadId)
     .maybeSingle();
   if (error) throw new Error(error.message);
-  if (!row?.storage_path) throw new Error("The original file is no longer archived for this import.");
+  if (!row?.storage_path)
+    throw new Error("The original file is no longer archived for this import.");
 
   const { downloadArchived } = await import("./statement-archive.server");
   const file = await downloadArchived(supabase, row.storage_path);
@@ -317,8 +530,6 @@ export async function reparseStatement(opts: {
     },
   });
 }
-
-
 
 export async function saveCorrections(
   supabase: any,
@@ -340,16 +551,6 @@ export async function saveCorrections(
   // Promote confirmed names into the shared dictionary (best effort).
   try {
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    await supabaseAdmin.from("global_merchant_dictionary").upsert(
-      corrections.map((c) => ({
-        normalized_pattern: c.normalizedPattern,
-        canonical_payee_name: c.payeeName,
-        suggested_category: c.category ?? null,
-        confidence_source: "user_confirmed" as const,
-      })),
-      { onConflict: "normalized_pattern" },
-    );
-
     // Also persist to payee_pattern_categories (household-scoped)
     // Requires householdId — derive from userId
     const householdId = await getHhId({ supabase, userId });
@@ -364,12 +565,11 @@ export async function saveCorrections(
         const entries = corrections
           .filter((c) => c.category)
           .map((c) => {
-            const { resolveCategoryId: resolve } = require("./category-resolver");
             return {
               pattern: c.normalizedPattern,
-              categoryId: resolve(c.category, catIndex),
+              categoryId: resolveCategoryId(c.category, catIndex),
               categoryName: c.category,
-              source: 'learned' as const,
+              source: "learned" as const,
               confidence: 0.95,
             };
           })

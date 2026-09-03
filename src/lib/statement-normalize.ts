@@ -33,6 +33,21 @@ const NOISE_TOKENS = new Set([
   "TRANSFER",
   "PAYMENT",
   "PAYMENTS",
+  "PHONE",
+  "PAYTM",
+  "BHARATPE",
+  "RZP",
+  "RZPREC",
+  "BRK",
+  "TRANSACTION",
+  "UPIINTENT",
+  "MANDATEREQUEST",
+  "SUBSCHARGE",
+  "NOTIFICATION",
+  "REQUEST",
+  "ACCOUNT",
+  "ACC",
+  "ME",
   "PMT",
   "PUR",
   "PURCHASE",
@@ -68,6 +83,23 @@ const NOISE_TOKENS = new Set([
   "OF",
   "FOR",
 ]);
+
+/** High-confidence aliases where the narration itself contains a stable brand. */
+const CANONICAL_MERCHANT_HINTS: Array<[RegExp, string]> = [
+  [/\b(?:FINZOOMERS|INDMONEY)\b/, "INDMONEY"],
+  [/\bZERODHA\b/, "ZERODHA"],
+  [/\bADOBE(?:AUTOPAY)?\b/, "ADOBE"],
+  [/\bBLINKIT\b/, "BLINKIT"],
+  [/\bSPOTIFY\b/, "SPOTIFY"],
+  [/\bURBANCOMPANY\b|\bURBAN COMPANY\b/, "URBAN COMPANY"],
+  [/\bMEDIBUDDY\b/, "MEDIBUDDY"],
+  [/\bTATA\s*AIA\b|\bTATAAIA\b/, "TATA AIA"],
+  [/\bMC\s*DONALD'?S?\b|\bMCDONALD'?S?\b/, "MCDONALDS"],
+  [/\bSTATE BANK OF INDIA\b/, "STATE BANK OF INDIA"],
+  [/\bCRED CLUB\b/, "CRED"],
+  [/\bAPOLLO PHARMAC(?:Y)?\b/, "APOLLO PHARMACY"],
+  [/\bCOMPASS INDIA FOOD\b/, "COMPASS INDIA FOOD"],
+];
 
 /** Geography / generic tail tokens: kept out of the pattern so the same
  * merchant in two cities collapses to one entry. */
@@ -142,6 +174,13 @@ export function normalizePattern(raw: string): string {
   if (!raw) return "";
 
   let s = String(raw).toUpperCase();
+  s = s.replace(/\bBY WHATSAPP\b/g, " ");
+
+  // Prefer an explicit, known brand anywhere in the narration. This prevents
+  // processors and clearing-house prefixes from fragmenting one merchant.
+  for (const [matcher, canonical] of CANONICAL_MERCHANT_HINTS) {
+    if (matcher.test(s)) return canonical;
+  }
 
   // Strip repeated leading channel prefixes: "UPI-NEFT-ACME" -> "ACME"
   for (let i = 0; i < 4; i++) {
@@ -216,12 +255,28 @@ export function normalizePattern(raw: string): string {
 export function lookupKeys(pattern: string): string[] {
   const parts = pattern.split(" ").filter(Boolean);
   const keys: string[] = [];
-  for (let take = Math.min(parts.length, 3); take >= 1; take--) {
-    const key = parts.slice(0, take).join(" ");
+  const add = (key: string) => {
     if (key && !keys.includes(key)) keys.push(key);
+  };
+  add(pattern);
+
+  // Prefix candidates retain compatibility with existing dictionary rows.
+  for (let take = Math.min(parts.length, 3); take >= 1; take--) {
+    add(parts.slice(0, take).join(" "));
   }
-  if (!keys.includes(pattern)) keys.unshift(pattern);
-  return keys;
+
+  // Merchant tokens are often behind a clearing-house or processor prefix.
+  // Add bounded sliding phrases and meaningful single tokens from anywhere.
+  for (let size = 3; size >= 2; size--) {
+    for (let start = 1; start + size <= parts.length; start++) {
+      add(parts.slice(start, start + size).join(" "));
+    }
+  }
+  for (const part of parts) {
+    if (part.length >= 4 && !/^\d+$/.test(part)) add(part);
+  }
+
+  return keys.slice(0, 16);
 }
 
 /** Split an array into fixed-size chunks. */

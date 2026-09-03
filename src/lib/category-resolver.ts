@@ -236,6 +236,7 @@ const KEYWORD_RULES: KeywordRule[] = [
   },
 
   // -- Food & Dining --
+  { words: ["COMPASS INDIA FOOD"], categories: ["Restaurants & Cafes", "Food & Dining"] },
   {
     words: ["SWIGGY", "ZOMATO", "FAASOS", "BEHROUZ", "BOX8", "REBEL FOODS", "EAT FIT"],
     categories: ["Food Delivery", "Food & Dining"],
@@ -488,6 +489,7 @@ const KEYWORD_RULES: KeywordRule[] = [
     categories: ["Credit Card Payment", "Transfers"],
     type: "transfer",
   },
+  { words: ["CRED"], categories: ["Credit Card Payment", "Transfers"], type: "transfer" },
   {
     words: ["BAJAJ FINSERV", "BAJAJ FINANCE", "TATA CAPITAL", "HDFC LTD"],
     categories: ["Loans & EMI", "Loan"],
@@ -498,6 +500,7 @@ const KEYWORD_RULES: KeywordRule[] = [
   },
 
   // -- Health & Medical --
+  { words: ["MEDIBUDDY"], categories: ["Doctor & Hospital", "Health & Medical"] },
   {
     words: ["HOSPITAL", "MANIPAL", "PRACTO", "CLINIC", "MAX HOSPITAL", "FORTIS", "NARAYANA HEALTH"],
     categories: ["Doctor & Hospital", "Health & Medical"],
@@ -617,6 +620,7 @@ const KEYWORD_RULES: KeywordRule[] = [
     ],
     categories: ["Penalties & Processing Fees", "Taxes & Fees"],
   },
+  { words: ["RETURN CHARGES"], categories: ["Bank Charges", "Taxes & Fees"] },
 
   // -- Cash & ATM --
   {
@@ -631,6 +635,18 @@ const KEYWORD_RULES: KeywordRule[] = [
   },
 ];
 
+const keywordMatcherCache = new Map<string, RegExp>();
+
+function matchesKeyword(haystack: string, word: string): boolean {
+  let matcher = keywordMatcherCache.get(word);
+  if (!matcher) {
+    const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    matcher = new RegExp(`(?:^|[^A-Z0-9])${escaped}(?:$|[^A-Z0-9])`);
+    keywordMatcherCache.set(word, matcher);
+  }
+  return matcher.test(haystack);
+}
+
 /**
  * Try to categorize a pattern using deterministic keyword rules.
  * Returns the resolved category UUID or null.
@@ -643,7 +659,7 @@ export function categorizeByKeywords(
   const haystack = `${pattern} ${description}`.toUpperCase();
 
   for (const rule of KEYWORD_RULES) {
-    const matched = rule.words.some((word) => haystack.includes(word));
+    const matched = rule.words.some((word) => matchesKeyword(haystack, word));
     if (!matched) continue;
 
     // Try each candidate category name in order
@@ -668,7 +684,7 @@ export function inferTypeByKeywords(
 
   for (const rule of KEYWORD_RULES) {
     if (!rule.type) continue;
-    if (rule.words.some((word) => haystack.includes(word))) {
+    if (rule.words.some((word) => matchesKeyword(haystack, word))) {
       return rule.type;
     }
   }

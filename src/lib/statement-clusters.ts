@@ -9,16 +9,10 @@
 
 import { titleCase, normalizePattern } from "./statement-normalize";
 import { resolveCategoryId, categorizeByKeywords, type CategoryIndex } from "./category-resolver";
+import { semanticMergeAllowed, type NarrationFingerprint } from "./statement-fingerprint";
 
 export type MatchSource =
-  | "alias"
-  | "payee"
-  | "rule"
-  | "dictionary"
-  | "cluster"
-  | "ai"
-  | "manual"
-  | "pending";
+  "alias" | "payee" | "rule" | "dictionary" | "cluster" | "ai" | "manual" | "pending";
 
 export type ClusterStatus = "auto" | "suggested" | "review" | "approved" | "ignored";
 
@@ -29,6 +23,8 @@ export type ClusterTxn = {
   amount: number;
   type: "income" | "expense" | "transfer";
   pattern: string;
+  fingerprint?: NarrationFingerprint;
+  reversal_group_id?: string;
   transfer_account_id?: string | null;
 };
 
@@ -57,6 +53,15 @@ export type Cluster = {
   existingPayeeId: string | null;
   isTransfer: boolean;
   pendingAi: boolean;
+  resolutionReason:
+    | "saved_payee"
+    | "household_pattern"
+    | "user_override"
+    | "dictionary"
+    | "keyword"
+    | "ai"
+    | "unresolved";
+  categoryResolutionError: string | null;
   transfer_account_id?: string | null;
 };
 
@@ -170,7 +175,10 @@ const MAX_BLOCK = 150; // raised from 60 to support large payees like Amazon wit
  * a block, and cluster cohesion is validated against the block representative
  * to prevent transitive chaining ("A~B, B~C" merging unrelated A and C).
  */
-export function groupPatterns(patterns: string[]): string[][] {
+export function groupPatterns(
+  patterns: string[],
+  fingerprints?: Map<string, NarrationFingerprint>,
+): string[][] {
   const uf = new UnionFind(patterns.length);
   const blocks = new Map<string, number[]>();
   patterns.forEach((p, i) => {
@@ -192,6 +200,14 @@ export function groupPatterns(patterns: string[]): string[][] {
     const rep = idxs.reduce((a, b) => (patterns[a]!.length <= patterns[b]!.length ? a : b));
     for (const i of idxs) {
       if (i === rep) continue;
+      const repFingerprint = fingerprints?.get(patterns[rep]!);
+      const candidateFingerprint = fingerprints?.get(patterns[i]!);
+      if (
+        repFingerprint &&
+        candidateFingerprint &&
+        !semanticMergeAllowed(repFingerprint, candidateFingerprint)
+      )
+        continue;
       if (patternSimilarity(patterns[rep]!, patterns[i]!) >= SIM_THRESHOLD) uf.union(rep, i);
     }
   }
@@ -218,6 +234,7 @@ function sourceOf(raw: string | undefined): MatchSource {
     case "payee":
       return "payee";
     case "rule":
+    case "keyword":
       return "rule";
     case "ai":
     case "ai_inferred":
@@ -263,7 +280,14 @@ export function buildClusters(opts: {
   categoryIndex?: CategoryIndex;
   patternCategoryMap?: Map<string, string>;
 }): Cluster[] {
-  const { transactions, resolved, existingPayees, categoryIdByName, categoryIndex, patternCategoryMap } = opts;
+  const {
+    transactions,
+    resolved,
+    existingPayees,
+    categoryIdByName,
+    categoryIndex,
+    patternCategoryMap,
+  } = opts;
 
   // 1 · aggregate by unique description within a pattern
   const byPattern = new Map<string, Map<string, Member>>();
@@ -296,10 +320,33 @@ export function buildClusters(opts: {
   const resolvedPatterns = patterns.filter((p) => resolved[p]);
   const unresolvedPatterns = patterns.filter((p) => !resolved[p]);
 
+  const fingerprintsByPattern = new Map<string, NarrationFingerprint>();
+  for (const transaction of transactions) {
+    if (transaction.fingerprint && !fingerprintsByPattern.has(transaction.pattern)) {
+      fingerprintsByPattern.set(transaction.pattern, transaction.fingerprint);
+    }
+  }
+
+  const resolvedGroups: string[][] = [];
+  for (const pattern of resolvedPatterns) {
+    const identity = resolved[pattern]!.payee.trim().toUpperCase();
+    const fingerprint = fingerprintsByPattern.get(pattern);
+    const group = resolvedGroups.find((candidateGroup) => {
+      const first = candidateGroup[0]!;
+      if (resolved[first]!.payee.trim().toUpperCase() !== identity) return false;
+      const firstFingerprint = fingerprintsByPattern.get(first);
+      return (
+        !fingerprint || !firstFingerprint || semanticMergeAllowed(fingerprint, firstFingerprint)
+      );
+    });
+    if (group) group.push(pattern);
+    else resolvedGroups.push([pattern]);
+  }
+
   // 2 · resolved patterns keep their own identity; unresolved ones get clustered
   const groups: string[][] = [
-    ...resolvedPatterns.map((p) => [p]),
-    ...groupPatterns(unresolvedPatterns),
+    ...resolvedGroups,
+    ...groupPatterns(unresolvedPatterns, fingerprintsByPattern),
   ];
 
   const payeeByName = new Map<string, (typeof existingPayees)[number]>();
@@ -333,7 +380,7 @@ export function buildClusters(opts: {
       },
       { income: 0, expense: 0, transfer: 0 },
     );
-    const type = (Object.entries(votes).sort((a, b) => b[1] - a[1])[0]?.[0] ??
+    let type = (Object.entries(votes).sort((a, b) => b[1] - a[1])[0]?.[0] ??
       "expense") as Cluster["type"];
 
     const hit = group.map((p) => resolved[p]).find(Boolean);
@@ -342,7 +389,9 @@ export function buildClusters(opts: {
     // Resolve existing payee by exact pattern, normalized pattern, or member descriptions
     let existing = group.map((p) => payeeByName.get(p.toLowerCase().trim())).find(Boolean) ?? null;
     if (!existing) {
-      existing = group.map((p) => payeeByName.get(normalizePattern(p).toLowerCase().trim())).find(Boolean) ?? null;
+      existing =
+        group.map((p) => payeeByName.get(normalizePattern(p).toLowerCase().trim())).find(Boolean) ??
+        null;
     }
     if (!existing) {
       for (const m of members) {
@@ -384,6 +433,18 @@ export function buildClusters(opts: {
     const status = isExisting ? "auto" : statusFor(source, confidence);
 
     let category_id = existing?.category_id ?? null;
+    let resolutionReason: Cluster["resolutionReason"] = existing?.category_id
+      ? "saved_payee"
+      : isUserHit
+        ? "user_override"
+        : hit?.source === "dictionary"
+          ? "dictionary"
+          : hit?.source === "ai"
+            ? "ai"
+            : hit?.source === "keyword"
+              ? "keyword"
+              : "unresolved";
+    let categoryResolutionError: string | null = null;
     // Try pattern-specific category from payee_pattern_categories
     if (!category_id && patternCategoryMap) {
       category_id = patternCategoryMap.get(rep) ?? null;
@@ -391,9 +452,13 @@ export function buildClusters(opts: {
       if (!category_id) {
         for (const p of group) {
           const patCat = patternCategoryMap.get(p);
-          if (patCat) { category_id = patCat; break; }
+          if (patCat) {
+            category_id = patCat;
+            break;
+          }
         }
       }
+      if (category_id) resolutionReason = "household_pattern";
     }
     // Then fuzzy-resolve from AI/dictionary hit using category resolver
     if (!category_id && hit?.category) {
@@ -403,12 +468,32 @@ export function buildClusters(opts: {
         // Fallback to exact match
         category_id =
           categoryIdByName.get(hit.category.toLowerCase()) ??
-          (categoryIdByName.get(hit.category) ?? null);
+          categoryIdByName.get(hit.category) ??
+          null;
       }
+      if (!category_id) {
+        categoryResolutionError = `Could not resolve category "${hit.category}" to a household category`;
+      }
+    }
+    if (!category_id && hit && !hit.category) {
+      categoryResolutionError = `${hit.source} match returned no category`;
     }
     // Then keyword-based categorization as last resort
     if (!category_id && categoryIndex) {
-      category_id = categorizeByKeywords(rep, members[0]?.description ?? '', categoryIndex);
+      category_id = categorizeByKeywords(rep, members[0]?.description ?? "", categoryIndex);
+      if (category_id) {
+        resolutionReason = "keyword";
+        categoryResolutionError = null;
+      }
+    }
+
+    // A resolved transfer category is stronger than the debit/credit-only
+    // type inferred by spreadsheet parsing.
+    if (category_id && categoryIndex) {
+      const categoryName = categoryIndex.nameById.get(category_id)?.toLowerCase();
+      if (categoryName && categoryIndex.kindByName.get(categoryName) === "transfer") {
+        type = "transfer";
+      }
     }
 
     return {
@@ -428,12 +513,53 @@ export function buildClusters(opts: {
       existingPayeeId: existing?.id ?? null,
       isTransfer: type === "transfer",
       pendingAi: !hit && !isExisting,
+      resolutionReason,
+      categoryResolutionError,
     } satisfies Cluster;
   });
 }
 
 export const clusterTxnCount = (c: Cluster) => c.members.reduce((s, m) => s + m.count, 0);
 export const clusterTotal = (c: Cluster) => c.members.reduce((s, m) => s + m.total, 0);
+
+export type ImportDiagnostics = {
+  transactions: number;
+  clusters: number;
+  categorizedTransactions: number;
+  uncategorizedTransactions: number;
+  resolutionCounts: Record<Cluster["resolutionReason"], number>;
+  categoryResolutionErrors: number;
+};
+
+export function buildImportDiagnostics(clusters: Cluster[]): ImportDiagnostics {
+  const resolutionCounts: ImportDiagnostics["resolutionCounts"] = {
+    saved_payee: 0,
+    household_pattern: 0,
+    user_override: 0,
+    dictionary: 0,
+    keyword: 0,
+    ai: 0,
+    unresolved: 0,
+  };
+  let transactions = 0;
+  let categorizedTransactions = 0;
+  let categoryResolutionErrors = 0;
+  for (const cluster of clusters) {
+    const count = clusterTxnCount(cluster);
+    transactions += count;
+    if (cluster.category_id) categorizedTransactions += count;
+    resolutionCounts[cluster.resolutionReason] += 1;
+    if (cluster.categoryResolutionError) categoryResolutionErrors += 1;
+  }
+  return {
+    transactions,
+    clusters: clusters.length,
+    categorizedTransactions,
+    uncategorizedTransactions: transactions - categorizedTransactions,
+    resolutionCounts,
+    categoryResolutionErrors,
+  };
+}
 
 export type ClusterStats = {
   transactions: number;
@@ -554,7 +680,8 @@ export function moveMembers(
 
   return all
     .map((c) => {
-      if (c.id === fromId) return { ...c, members: kept, patterns: Array.from(new Set(kept.map((m) => m.pattern))) };
+      if (c.id === fromId)
+        return { ...c, members: kept, patterns: Array.from(new Set(kept.map((m) => m.pattern))) };
       if (c.id === toId)
         return {
           ...c,
@@ -618,7 +745,7 @@ export function groupClustersByCategory(
 
   const result: CategoryClusterGroup[] = [];
   for (const [catId, list] of groups.entries()) {
-    const name = catId ? catMap.get(catId) ?? "Other Category" : "Uncategorized";
+    const name = catId ? (catMap.get(catId) ?? "Other Category") : "Uncategorized";
     let amount = 0;
     let txns = 0;
     for (const cl of list) {
@@ -666,7 +793,15 @@ export type ReadinessResult = {
 export function computeReadiness(clusters: Cluster[]): ReadinessResult {
   const active = clusters.filter((c) => c.status !== "ignored");
   const total = active.length;
-  if (total === 0) return { score: 1, autoCount: 0, suggestedCount: 0, reviewCount: 0, categorizedPct: 1, total: 0 };
+  if (total === 0)
+    return {
+      score: 1,
+      autoCount: 0,
+      suggestedCount: 0,
+      reviewCount: 0,
+      categorizedPct: 1,
+      total: 0,
+    };
 
   let t1 = 0;
   let t2 = 0;

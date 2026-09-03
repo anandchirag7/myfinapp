@@ -54,6 +54,9 @@ export type ProcessingStats = {
   clusters: number;
   aiRemaining: number;
   exceptions: number;
+  categorizedTransactions: number;
+  uncategorizedTransactions: number;
+  resolutionCounts: Record<string, number>;
 };
 
 export const emptyStats: ProcessingStats = {
@@ -66,6 +69,9 @@ export const emptyStats: ProcessingStats = {
   clusters: 0,
   aiRemaining: 0,
   exceptions: 0,
+  categorizedTransactions: 0,
+  uncategorizedTransactions: 0,
+  resolutionCounts: {},
 };
 
 const fmt = (n: number) => n.toLocaleString();
@@ -106,7 +112,10 @@ function StageRow({ stage }: { stage: Stage }) {
         )}
       </span>
       {progress != null && (
-        <span className="hidden h-1 w-16 overflow-hidden rounded-full bg-border sm:block" aria-hidden>
+        <span
+          className="hidden h-1 w-16 overflow-hidden rounded-full bg-border sm:block"
+          aria-hidden
+        >
           <span
             className="block h-full rounded-full bg-primary transition-all"
             style={{ width: `${progress}%` }}

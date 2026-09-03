@@ -51,7 +51,7 @@ const accountSchema = z.object({
 
 export const upsertAccount = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((data: unknown) => accountSchema.parse(data))
+  .validator((data: unknown) => accountSchema.parse(data))
   .handler(async ({ context, data }) => {
     const householdId = await getHouseholdId(context);
     const row = { ...data, household_id: householdId };
@@ -66,7 +66,7 @@ export const upsertAccount = createServerFn({ method: "POST" })
 
 export const deleteAccount = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((data: unknown) => z.object({ id: z.string().uuid() }).parse(data))
+  .validator((data: unknown) => z.object({ id: z.string().uuid() }).parse(data))
   .handler(async ({ context, data }) => {
     const householdId = await getHouseholdId(context);
     const { error } = await context.supabase
@@ -115,7 +115,7 @@ const txnSchema = z.object({
 
 export const upsertTransaction = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((data: unknown) => txnSchema.parse(data))
+  .validator((data: unknown) => txnSchema.parse(data))
   .handler(async ({ context, data }) => {
     const householdId = await getHouseholdId(context);
     const row = { ...data, household_id: householdId, created_by: context.userId };
@@ -175,7 +175,7 @@ async function recomputeAccountBalance(supabase: any, householdId: string, accou
 
 export const deleteTransaction = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((data: unknown) => z.object({ id: z.string().uuid() }).parse(data))
+  .validator((data: unknown) => z.object({ id: z.string().uuid() }).parse(data))
   .handler(async ({ context, data }) => {
     const householdId = await getHouseholdId(context);
     // fetch first to know which accounts to recompute
@@ -198,7 +198,7 @@ export const deleteTransaction = createServerFn({ method: "POST" })
 
 export const listTransactions = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((data: unknown) =>
+  .validator((data: unknown) =>
     z
       .object({
         limit: z.number().max(500).default(100),
@@ -256,7 +256,7 @@ function computeRange(range: "1m" | "3m" | "6m" | "1y" | "ytd") {
 
 export const getDashboard = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((data: unknown) => rangeSchema.parse(data ?? {}))
+  .validator((data: unknown) => rangeSchema.parse(data ?? {}))
   .handler(async ({ context, data }) => {
     const householdId = await getHouseholdId(context);
     const { start: rangeStart, months: rangeMonths } = computeRange(data.range);

@@ -26,7 +26,10 @@ export async function lookupPatternCategories(
   householdId: string,
   patterns: string[],
 ): Promise<Map<string, { categoryId: string; categoryName: string | null; source: string }>> {
-  const result = new Map<string, { categoryId: string; categoryName: string | null; source: string }>();
+  const result = new Map<
+    string,
+    { categoryId: string; categoryName: string | null; source: string }
+  >();
   if (!patterns.length) return result;
 
   // Query in chunks to avoid Supabase URL length limits
@@ -44,7 +47,7 @@ export async function lookupPatternCategories(
     }
 
     // Group by pattern, prefer household-specific over global
-    const byPattern = new Map<string, typeof data[0]>();
+    const byPattern = new Map<string, (typeof data)[0]>();
     for (const row of data ?? []) {
       const existing = byPattern.get(row.normalized_pattern);
       // Household row always wins over global
@@ -126,7 +129,26 @@ export async function savePatternCategories(
 ): Promise<void> {
   if (!entries.length) return;
 
+  const patterns = entries.map((entry) => entry.pattern);
+  const existingRows: Array<{ id: string; normalized_pattern: string }> = [];
+  for (const patternChunk of chunk(patterns, 300)) {
+    const { data, error: lookupError } = await supabase
+      .from("payee_pattern_categories")
+      .select("id, normalized_pattern")
+      .eq("household_id", householdId)
+      .in("normalized_pattern", patternChunk);
+    if (lookupError) {
+      console.error("savePatternCategories lookup error:", lookupError.message);
+      return;
+    }
+    existingRows.push(...(data ?? []));
+  }
+  const idByPattern = new Map(
+    (existingRows ?? []).map((row: any) => [row.normalized_pattern, row.id]),
+  );
+
   const rows = entries.map((e) => ({
+    ...(idByPattern.has(e.pattern) ? { id: idByPattern.get(e.pattern) } : {}),
     household_id: householdId,
     normalized_pattern: e.pattern,
     category_id: e.categoryId,
@@ -134,18 +156,16 @@ export async function savePatternCategories(
     payee_id: e.payeeId ?? null,
     sample_description: e.sampleDescription ?? null,
     source: e.source,
-    confidence: e.confidence ?? 0.70,
+    confidence: e.confidence ?? 0.7,
     is_active: true,
   }));
 
   // Upsert in chunks
   for (const part of chunk(rows, 200)) {
-    const { error } = await supabase
-      .from("payee_pattern_categories")
-      .upsert(part, {
-        onConflict: "household_id,normalized_pattern",
-        ignoreDuplicates: false,
-      });
+    const { error } = await supabase.from("payee_pattern_categories").upsert(part, {
+      onConflict: "id",
+      ignoreDuplicates: false,
+    });
     if (error) {
       console.error("savePatternCategories error:", error.message);
     }
@@ -160,17 +180,14 @@ export async function savePatternCategories(
  * Get the user's auto-approve threshold (0.0 – 1.0).
  * Falls back to 0.80 if not set.
  */
-export async function getAutoApproveThreshold(
-  supabase: any,
-  userId: string,
-): Promise<number> {
+export async function getAutoApproveThreshold(supabase: any, userId: string): Promise<number> {
   const { data } = await supabase
     .from("profiles")
     .select("auto_approve_threshold")
     .eq("id", userId)
     .maybeSingle();
 
-  return Number(data?.auto_approve_threshold ?? 0.80);
+  return Number(data?.auto_approve_threshold ?? 0.8);
 }
 
 // ---------------------------------------------------------------------------
@@ -184,7 +201,9 @@ export const listPatternsByPayee = createServerFn({ method: "GET" })
     const householdId = await getHouseholdId(context);
     const { data: patterns, error } = await context.supabase
       .from("payee_pattern_categories")
-      .select("id, normalized_pattern, sample_description, category_id, category_name, source, confidence, is_active")
+      .select(
+        "id, normalized_pattern, sample_description, category_id, category_name, source, confidence, is_active",
+      )
       .eq("payee_id", data.payeeId)
       .or(`household_id.is.null,household_id.eq.${householdId}`)
       .order("normalized_pattern");
@@ -195,27 +214,33 @@ export const listPatternsByPayee = createServerFn({ method: "GET" })
 export const updatePatternCategory = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) =>
-    z.object({
-      normalizedPattern: z.string().min(1),
-      categoryId: z.string().uuid().nullable(),
-    }).parse(d),
+    z
+      .object({
+        normalizedPattern: z.string().min(1),
+        categoryId: z.string().uuid().nullable(),
+      })
+      .parse(d),
   )
   .handler(async ({ context, data }) => {
     const householdId = await getHouseholdId(context);
-    // Upsert a household-scoped row (never touch global)
+    const { data: existing } = await context.supabase
+      .from("payee_pattern_categories")
+      .select("id")
+      .eq("household_id", householdId)
+      .eq("normalized_pattern", data.normalizedPattern)
+      .maybeSingle();
+    const payload = {
+      ...(existing?.id ? { id: existing.id } : {}),
+      household_id: householdId,
+      normalized_pattern: data.normalizedPattern,
+      category_id: data.categoryId,
+      source: "manual",
+      confidence: 1.0,
+      is_active: true,
+    };
     const { error } = await context.supabase
       .from("payee_pattern_categories")
-      .upsert(
-        {
-          household_id: householdId,
-          normalized_pattern: data.normalizedPattern,
-          category_id: data.categoryId,
-          source: "manual",
-          confidence: 1.0,
-          is_active: true,
-        },
-        { onConflict: "household_id,normalized_pattern" },
-      );
+      .upsert(payload, { onConflict: "id" });
     if (error) throw error;
     return { ok: true };
   });
@@ -229,16 +254,18 @@ export const getImportSettings = createServerFn({ method: "GET" })
       .eq("id", context.userId)
       .maybeSingle();
     return {
-      autoApproveThreshold: Number(data?.auto_approve_threshold ?? 0.80),
+      autoApproveThreshold: Number(data?.auto_approve_threshold ?? 0.8),
     };
   });
 
 export const updateImportSettings = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) =>
-    z.object({
-      autoApproveThreshold: z.number().min(0).max(1),
-    }).parse(d),
+    z
+      .object({
+        autoApproveThreshold: z.number().min(0).max(1),
+      })
+      .parse(d),
   )
   .handler(async ({ context, data }) => {
     const { error } = await context.supabase

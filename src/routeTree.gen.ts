@@ -32,6 +32,7 @@ import { Route as AuthenticatedChatThreadIdRouteImport } from './routes/_authent
 import { Route as AuthenticatedAccountsAccountIdRouteImport } from './routes/_authenticated/accounts_.$accountId'
 import { Route as Char91DotmcpChar93InvokeToolToolRouteImport } from './routes/[.mcp]/invoke-tool/$tool'
 import { Route as DotlovableOauthConsentRouteImport } from './routes/[.]lovable.oauth.consent'
+import { Route as ApiPublicHooksStatementWorkerRouteImport } from './routes/api/public/hooks/statement-worker'
 import { Route as ApiPublicHooksStatementClassifyRouteImport } from './routes/api/public/hooks/statement-classify'
 import { Route as ApiPublicHooksBillsWhatsappRemindersRouteImport } from './routes/api/public/hooks/bills-whatsapp-reminders'
 
@@ -156,6 +157,12 @@ const DotlovableOauthConsentRoute = DotlovableOauthConsentRouteImport.update({
   path: '/.lovable/oauth/consent',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiPublicHooksStatementWorkerRoute =
+  ApiPublicHooksStatementWorkerRouteImport.update({
+    id: '/api/public/hooks/statement-worker',
+    path: '/api/public/hooks/statement-worker',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiPublicHooksStatementClassifyRoute =
   ApiPublicHooksStatementClassifyRouteImport.update({
     id: '/api/public/hooks/statement-classify',
@@ -194,6 +201,7 @@ export interface FileRoutesByFullPath {
   '/chat/': typeof AuthenticatedChatIndexRoute
   '/api/public/hooks/bills-whatsapp-reminders': typeof ApiPublicHooksBillsWhatsappRemindersRoute
   '/api/public/hooks/statement-classify': typeof ApiPublicHooksStatementClassifyRoute
+  '/api/public/hooks/statement-worker': typeof ApiPublicHooksStatementWorkerRoute
 }
 export interface FileRoutesByTo {
   '/auth': typeof AuthRoute
@@ -219,6 +227,7 @@ export interface FileRoutesByTo {
   '/chat': typeof AuthenticatedChatIndexRoute
   '/api/public/hooks/bills-whatsapp-reminders': typeof ApiPublicHooksBillsWhatsappRemindersRoute
   '/api/public/hooks/statement-classify': typeof ApiPublicHooksStatementClassifyRoute
+  '/api/public/hooks/statement-worker': typeof ApiPublicHooksStatementWorkerRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -247,6 +256,7 @@ export interface FileRoutesById {
   '/_authenticated/chat/': typeof AuthenticatedChatIndexRoute
   '/api/public/hooks/bills-whatsapp-reminders': typeof ApiPublicHooksBillsWhatsappRemindersRoute
   '/api/public/hooks/statement-classify': typeof ApiPublicHooksStatementClassifyRoute
+  '/api/public/hooks/statement-worker': typeof ApiPublicHooksStatementWorkerRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -275,6 +285,7 @@ export interface FileRouteTypes {
     | '/chat/'
     | '/api/public/hooks/bills-whatsapp-reminders'
     | '/api/public/hooks/statement-classify'
+    | '/api/public/hooks/statement-worker'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/auth'
@@ -300,6 +311,7 @@ export interface FileRouteTypes {
     | '/chat'
     | '/api/public/hooks/bills-whatsapp-reminders'
     | '/api/public/hooks/statement-classify'
+    | '/api/public/hooks/statement-worker'
   id:
     | '__root__'
     | '/_authenticated'
@@ -327,6 +339,7 @@ export interface FileRouteTypes {
     | '/_authenticated/chat/'
     | '/api/public/hooks/bills-whatsapp-reminders'
     | '/api/public/hooks/statement-classify'
+    | '/api/public/hooks/statement-worker'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -340,6 +353,7 @@ export interface RootRouteChildren {
   Char91DotmcpChar93InvokeToolToolRoute: typeof Char91DotmcpChar93InvokeToolToolRoute
   ApiPublicHooksBillsWhatsappRemindersRoute: typeof ApiPublicHooksBillsWhatsappRemindersRoute
   ApiPublicHooksStatementClassifyRoute: typeof ApiPublicHooksStatementClassifyRoute
+  ApiPublicHooksStatementWorkerRoute: typeof ApiPublicHooksStatementWorkerRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -505,6 +519,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DotlovableOauthConsentRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/public/hooks/statement-worker': {
+      id: '/api/public/hooks/statement-worker'
+      path: '/api/public/hooks/statement-worker'
+      fullPath: '/api/public/hooks/statement-worker'
+      preLoaderRoute: typeof ApiPublicHooksStatementWorkerRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/public/hooks/statement-classify': {
       id: '/api/public/hooks/statement-classify'
       path: '/api/public/hooks/statement-classify'
@@ -583,6 +604,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiPublicHooksBillsWhatsappRemindersRoute:
     ApiPublicHooksBillsWhatsappRemindersRoute,
   ApiPublicHooksStatementClassifyRoute: ApiPublicHooksStatementClassifyRoute,
+  ApiPublicHooksStatementWorkerRoute: ApiPublicHooksStatementWorkerRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

@@ -13,15 +13,34 @@ import {
   normalizePattern,
   titleCase,
   withConcurrency,
-  PIPELINE_CATEGORIES,
 } from "./statement-normalize";
-import { lookupPatternCategories, lookupPatternCategoryNames, savePatternCategories } from "./pattern-categories.functions";
-import { buildCategoryIndex, resolveCategoryId, type CategoryIndex } from "./category-resolver";
+import {
+  lookupPatternCategories,
+  lookupPatternCategoryNames,
+  savePatternCategories,
+} from "./pattern-categories.functions";
+import {
+  buildCategoryIndex,
+  categorizeByKeywords,
+  resolveCategoryId,
+  type CategoryIndex,
+} from "./category-resolver";
+import { z } from "zod";
+import { createOllamaClient, OllamaError } from "./ollama.server";
+import { runWithBatchRecovery } from "./batch-recovery";
+import {
+  resolveCategoryKey,
+  STATEMENT_CATEGORY_KEYS,
+  type StatementCategoryKey,
+} from "./statement-category-keys";
 
 export type ResolvedMerchant = {
   payee: string;
   category: string | null;
-  source: "user" | "dictionary" | "ai" | "pending";
+  source: "user" | "dictionary" | "keyword" | "ai" | "pending";
+  categoryKey?: StatementCategoryKey | null;
+  confidence?: number;
+  evidence?: string[];
 };
 
 export type ResolvedMap = Record<string, ResolvedMerchant>;
@@ -32,6 +51,7 @@ export async function resolveFromLookups(
   userId: string,
   patterns: string[],
   householdId?: string,
+  resolverV2Enabled = true,
 ): Promise<{ resolved: ResolvedMap; unresolved: string[] }> {
   const resolved: ResolvedMap = {};
   if (!patterns.length) return { resolved, unresolved: [] };
@@ -57,9 +77,7 @@ export async function resolveFromLookups(
         .select("normalized_pattern, payee_name, category")
         .eq("user_id", userId)
         .in("normalized_pattern", part),
-      supabase
-        .from("memorized_payees")
-        .select("merchant, name, aliases, category_id"),
+      supabase.from("memorized_payees").select("merchant, name, aliases, category_id"),
       supabase
         .from("global_merchant_dictionary")
         .select("normalized_pattern, canonical_payee_name, suggested_category")
@@ -73,7 +91,8 @@ export async function resolveFromLookups(
         if (norm) {
           overrideMap.set(norm, { payee: o.payee_name, category: o.category });
           for (const lk of lookupKeys(norm)) {
-            if (lk) overrideMap.set(lk.toUpperCase(), { payee: o.payee_name, category: o.category });
+            if (lk)
+              overrideMap.set(lk.toUpperCase(), { payee: o.payee_name, category: o.category });
           }
         }
       }
@@ -134,6 +153,7 @@ export async function resolveFromLookups(
 
   for (const p of patterns) {
     const keys = keysByPattern.get(p) ?? [p];
+    const patternCategoryName = patternCatNames.get(p) ?? null;
     let hit: ResolvedMerchant | null = null;
     for (const k of keys) {
       const upperK = k.trim().toUpperCase();
@@ -153,106 +173,139 @@ export async function resolveFromLookups(
         const upperK = k.trim().toUpperCase();
         const d = dictMap.get(upperK) || dictMap.get(k);
         if (d) {
-          hit = { payee: d.payee, category: d.category ?? null, source: "dictionary" };
+          hit = {
+            payee: d.payee,
+            category: patternCategoryName ?? d.category ?? null,
+            source: "dictionary",
+          };
           break;
         }
       }
     }
 
-    // Enrich with pattern-level category name if available and no category yet
-    if (hit && !hit.category) {
-      const patCatName = patternCatNames.get(p);
-      if (patCatName) hit.category = patCatName;
+    // Pattern memory fills a missing saved-payee category and takes precedence
+    // over the global dictionary for non-user matches.
+    if (hit && !hit.category && patternCategoryName) {
+      hit.category = patternCategoryName;
     }
     // If not resolved at all, but we have a pattern-level category name, create a hit
-    if (!hit && patternCatNames.has(p)) {
-      hit = { payee: titleCase(p), category: patternCatNames.get(p)!, source: "dictionary" };
+    if (!hit && patternCategoryName) {
+      hit = { payee: titleCase(p), category: patternCategoryName, source: "dictionary" };
     }
 
     if (hit) resolved[p] = hit;
     else unresolved.push(p);
   }
 
+  // Semantic retrieval is attempted only after stronger exact household and
+  // dictionary evidence. It is accepted only with token corroboration.
+  if (resolverV2Enabled && householdId && unresolved.length && process.env.OLLAMA_EMBED_MODEL) {
+    try {
+      const { retrieveVerifiedEntities } = await import("./statement-embedding.server");
+      const semantic = await retrieveVerifiedEntities(supabase, householdId, unresolved);
+      for (const [pattern, match] of semantic) {
+        resolved[pattern] = {
+          payee: match.canonicalName,
+          category: null,
+          source: "dictionary",
+          categoryKey: (match.categoryKey as StatementCategoryKey | null) ?? null,
+          confidence: Math.min(0.96, match.similarity),
+          evidence: ["verified_embedding", "shared_token"],
+        };
+      }
+      const semanticallyResolved = new Set(semantic.keys());
+      return { resolved, unresolved: unresolved.filter((p) => !semanticallyResolved.has(p)) };
+    } catch {
+      // Embeddings are an optimization; Ollama classification remains available.
+    }
+  }
+
   return { resolved, unresolved };
 }
 
-const AI_MODEL = "google/gemini-2.5-flash-lite";
-const BATCH_SIZE = 80;
-const CONCURRENCY = 4;
+const BATCH_SIZE = Math.min(15, Math.max(1, Number(process.env.OLLAMA_BATCH_SIZE || 12)));
+const CONCURRENCY = Math.min(2, Math.max(1, Number(process.env.OLLAMA_CONCURRENCY || 1)));
 
-type Sample = { pattern: string; samples: string[]; type: string };
+type Sample = { pattern: string; samples: string[]; type: string; counterpartyKind?: string };
 
 /** Ask the model to name + categorise one batch of unknown patterns.
  *  Now accepts user's actual category names for better resolution. */
-async function classifyBatch(batch: Sample[], apiKey?: string, userCategoryNames?: string[]): Promise<ResolvedMap> {
-  const baseURL = process.env.OLLAMA_BASE_URL || "https://ai.gateway.lovable.dev/v1";
-  const model = process.env.OLLAMA_MODEL || AI_MODEL;
-
+async function classifyBatch(batch: Sample[], userCategoryNames?: string[]): Promise<ResolvedMap> {
   // Use user's actual category names when available, fall back to pipeline defaults
-  const categoryList = (userCategoryNames && userCategoryNames.length > 0)
-    ? userCategoryNames.join(", ")
-    : PIPELINE_CATEGORIES.join(", ");
-
   const system = `You label bank statement merchant patterns.
-For each input pattern return the clean, human-readable merchant/payee name and one category.
-Allowed categories: ${categoryList}.
+For each input pattern return the clean human-readable merchant/payee name, a stable category_key, and confidence.
+Allowed category_key values: ${STATEMENT_CATEGORY_KEYS.join(", ")}.
 Rules:
 - Use the well-known brand name when recognisable ("SWIGGY" -> "Swiggy", "HDFCLIFE" -> "HDFC Life").
-- Person-to-person transfers: use the person's name in Title Case, category "Transfers".
-- Salary credits: category "Salary & Income". Bank charges/fees: "Fees & Charges".
-- Pick the MOST SPECIFIC matching category from the allowed list.
+- Person-to-person payments use the person's name and category_key "payments_to_people"; never infer own-account transfer.
+- Salary credits use "salary_income". Bank fees use "fees_charges".
+- Confidence must be calibrated from 0 to 1; ambiguous identities must be below 0.75.
 - Never invent patterns and never drop one. Output compact JSON only:
-{"results":[{"pattern":"<exact input pattern>","payee":"<name>","category":"<category>"}]}`;
+{"results":[{"pattern":"<exact input pattern>","payee":"<name>","category_key":"<key>","confidence":0.0}]}`;
 
   const user = JSON.stringify({
-    patterns: batch.map((b) => ({ pattern: b.pattern, examples: b.samples.slice(0, 2), type: b.type })),
+    patterns: batch.map((b) => ({
+      pattern: b.pattern,
+      examples: b.samples.slice(0, 2),
+      type: b.type,
+    })),
   });
 
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (apiKey) headers["Lovable-API-Key"] = apiKey;
-
-  const res = await fetch(`${baseURL}/chat/completions`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-      response_format: { type: "json_object" },
-      max_tokens: 8000,
-    }),
+  const responseSchema = z.object({
+    results: z.array(
+      z.object({
+        pattern: z.string(),
+        payee: z.string(),
+        category_key: z.enum(STATEMENT_CATEGORY_KEYS).nullable().optional(),
+        confidence: z.number().min(0).max(1),
+      }),
+    ),
   });
-  if (!res.ok) throw new Error(`AI gateway ${res.status}: ${(await res.text()).slice(0, 300)}`);
-
-  const json = await res.json();
-  const content: string = json.choices?.[0]?.message?.content ?? "{}";
-  const { salvageJson } = await import("./statement-parse.server");
-  let parsed: any;
-  try {
-    parsed = JSON.parse(content);
-  } catch {
-    parsed = salvageJson(content) ?? { results: [] };
-  }
+  const parsed = await createOllamaClient().chatJson(
+    [
+      { role: "system", content: system },
+      { role: "user", content: user },
+    ],
+    responseSchema,
+    { numPredict: Math.min(8000, Math.max(1200, batch.length * 160)) },
+  );
 
   const out: ResolvedMap = {};
-  // Accept both pipeline categories and user's custom categories
-  const allowed = new Set<string>([
-    ...(PIPELINE_CATEGORIES as readonly string[]),
-    ...(userCategoryNames ?? []),
-  ]);
+  const requestedPatterns = new Set(batch.map((item) => item.pattern));
   for (const r of Array.isArray(parsed.results) ? parsed.results : []) {
     const pattern = String(r?.pattern ?? "").trim();
     const payee = String(r?.payee ?? "").trim();
-    if (!pattern || !payee) continue;
-    // Accept any category the AI returns (it might use user's names)
-    const rawCat = String(r?.category ?? "").trim();
-    const category = rawCat || null;
-    out[pattern] = { payee: payee.slice(0, 120), category, source: "ai" };
+    if (!pattern || !payee || !requestedPatterns.has(pattern)) continue;
+    out[pattern] = {
+      payee: payee.slice(0, 120),
+      category: null,
+      categoryKey: r.category_key ?? null,
+      confidence: r.confidence,
+      evidence: ["ollama"],
+      source: "ai",
+    };
+  }
+  if (Object.keys(out).length !== batch.length) {
+    throw new OllamaError(
+      "schema_validation",
+      `Ollama returned ${Object.keys(out).length} of ${batch.length} requested patterns`,
+      true,
+    );
   }
   return out;
 }
+
+export type ClassificationDiagnostics = {
+  total: number;
+  processed: number;
+  aiClassified: number;
+  keywordFallback: number;
+  failedPatterns: string[];
+  retryCount: number;
+  batchCount: number;
+  webEnrichment: { suggested: number; skipped: number; rejected: number };
+  splitCount: number;
+};
 
 /**
  * Classify unknown patterns in batches, persisting each finished batch to the
@@ -262,55 +315,136 @@ Rules:
 export async function classifyPendingPatterns(opts: {
   admin: any;
   uploadId: string;
+  userId?: string;
   pending: Sample[];
-  apiKey?: string;
   userCategoryNames?: string[];
   householdId?: string;
   categoryIndex?: CategoryIndex;
-}): Promise<ResolvedMap> {
-  const { admin, uploadId, pending, apiKey, userCategoryNames, householdId, categoryIndex } = opts;
+  webEnrichmentEnabled?: boolean;
+}): Promise<{ resolved: ResolvedMap; diagnostics: ClassificationDiagnostics }> {
+  const {
+    admin,
+    uploadId,
+    userId,
+    pending,
+    userCategoryNames,
+    householdId,
+    categoryIndex,
+    webEnrichmentEnabled = true,
+  } = opts;
   const batches = chunk(pending, BATCH_SIZE);
   const merged: ResolvedMap = {};
   let done = 0;
+  let aiClassified = 0;
+  let keywordFallback = 0;
+  let retryCount = 0;
+  let splitCount = 0;
+  const failedPatterns: string[] = [];
+  const webEnrichment = { suggested: 0, skipped: 0, rejected: 0 };
 
   await withConcurrency(batches, CONCURRENCY, async (batch) => {
     let labelled: ResolvedMap = {};
+    let lastError: unknown = null;
     try {
-      labelled = await classifyBatch(batch, apiKey, userCategoryNames);
-    } catch {
-      labelled = {};
+      const recovered = await runWithBatchRecovery(
+        batch,
+        (part) => classifyBatch(part, userCategoryNames),
+        { attempts: 2 },
+      );
+      retryCount += recovered.retries;
+      splitCount += recovered.splits;
+      labelled = Object.assign({}, ...recovered.results);
+    } catch (error) {
+      lastError = error;
+      retryCount += error instanceof OllamaError && error.retryable ? 1 : 0;
     }
 
-    // Fill gaps deterministically so no pattern is left without a name
-    for (const item of batch) {
-      if (!labelled[item.pattern]) {
-        labelled[item.pattern] = {
-          payee: titleCase(item.pattern),
-          category: null,
-          source: "ai",
-        };
+    if (categoryIndex) {
+      for (const value of Object.values(labelled)) {
+        const category = resolveCategoryKey(value.categoryKey, categoryIndex);
+        if (category) value.category = category.name;
       }
+    }
+
+    // Fill missing or failed AI rows deterministically when a keyword category
+    // is available. Truly unresolved rows remain reviewable and are reported.
+    for (const item of batch) {
+      const current = labelled[item.pattern];
+      if (current?.category) continue;
+      const categoryId = categoryIndex
+        ? categorizeByKeywords(item.pattern, item.samples[0] ?? "", categoryIndex)
+        : null;
+      const category =
+        categoryId && categoryIndex ? (categoryIndex.nameById.get(categoryId) ?? null) : null;
+      if (category) {
+        labelled[item.pattern] = {
+          payee: current?.payee || titleCase(item.pattern),
+          category,
+          source: current ? "ai" : "keyword",
+          categoryKey: current?.categoryKey ?? null,
+          confidence: current?.confidence ?? 0.8,
+          evidence: [...(current?.evidence ?? []), "keyword_rule"],
+        };
+        keywordFallback += 1;
+      } else {
+        // A valid identity is independent from category resolution. Preserve it
+        // and report only the category as unresolved.
+        if (current?.payee) {
+          labelled[item.pattern] = { ...current, category: null };
+        } else {
+          delete labelled[item.pattern];
+        }
+        failedPatterns.push(item.pattern);
+      }
+    }
+    aiClassified += Object.values(labelled).filter((entry) => entry.source === "ai").length;
+
+    // Release D is shadow-only: eligible business candidates are searched for
+    // audit evidence but never overwrite the classifier's decision.
+    if (webEnrichmentEnabled && householdId && userId) {
+      const { runMerchantEnrichmentShadow } = await import("./merchant-web-enrichment.server");
+      await Promise.all(
+        batch.map(async (item) => {
+          if (item.counterpartyKind !== "business" || !labelled[item.pattern]?.payee) {
+            webEnrichment.rejected++;
+            return;
+          }
+          try {
+            const shadow = await runMerchantEnrichmentShadow({
+              admin,
+              householdId,
+              userId,
+              candidate: labelled[item.pattern]!.payee,
+              kind: "business",
+            });
+            if (shadow.status === "suggested" || shadow.status === "cached") {
+              webEnrichment.suggested++;
+              labelled[item.pattern]!.evidence = [
+                ...(labelled[item.pattern]!.evidence ?? []),
+                "web_shadow",
+              ];
+            } else if (shadow.status === "skipped") webEnrichment.skipped++;
+            else webEnrichment.rejected++;
+          } catch {
+            webEnrichment.skipped++;
+          }
+        }),
+      );
     }
 
     Object.assign(merged, labelled);
     done += batch.length;
 
-    const rows = Object.entries(labelled).map(([normalized_pattern, v]) => ({
-      normalized_pattern,
-      canonical_payee_name: v.payee,
-      suggested_category: v.category,
-      confidence_source: "ai_classified" as const,
-    }));
-    if (rows.length) {
-      await admin
-        .from("global_merchant_dictionary")
-        .upsert(rows, { onConflict: "normalized_pattern", ignoreDuplicates: true });
-    }
+    // AI results are household-specific. Do not promote person names or
+    // uncertain local merchants into the global dictionary.
 
     // Progress ping (merged snapshot written at the end for consistency)
     await admin
       .from("statement_uploads")
-      .update({ processed_transactions: done })
+      .update({
+        processed_transactions: done,
+        error: lastError ? String((lastError as any)?.message ?? lastError).slice(0, 500) : null,
+      })
       .eq("id", uploadId);
 
     // Persist AI-classified pattern→category mappings for future instant lookups
@@ -322,7 +456,7 @@ export async function classifyPendingPatterns(opts: {
             pattern,
             categoryId: resolveCategoryId(v.category, categoryIndex),
             categoryName: v.category,
-            source: 'ai' as const,
+            source: "ai" as const,
             confidence: 0.72,
           }))
           .filter((e) => e.categoryId);
@@ -333,7 +467,46 @@ export async function classifyPendingPatterns(opts: {
         // Pattern persistence is non-critical
       }
     }
+
+    if (householdId) {
+      const rows = Object.entries(labelled).map(([pattern, value]) => ({
+        upload_id: uploadId,
+        household_id: householdId,
+        normalized_pattern: pattern,
+        identity_name: value.payee,
+        category_key: value.categoryKey ?? null,
+        category_id:
+          value.category && categoryIndex ? resolveCategoryId(value.category, categoryIndex) : null,
+        confidence: value.confidence ?? (value.source === "keyword" ? 0.8 : 0.72),
+        evidence: value.evidence ?? [value.source],
+        blocking_reason:
+          value.payee && value.category
+            ? null
+            : value.payee
+              ? "category_unknown"
+              : "identity_unknown",
+        resolver_version: "3.0.0",
+      }));
+      if (rows.length) {
+        await admin
+          .from("statement_pattern_resolutions")
+          .upsert(rows, { onConflict: "upload_id,normalized_pattern" });
+      }
+    }
   });
 
-  return merged;
+  return {
+    resolved: merged,
+    diagnostics: {
+      total: pending.length,
+      processed: done,
+      aiClassified,
+      keywordFallback,
+      failedPatterns,
+      retryCount,
+      batchCount: batches.length,
+      webEnrichment,
+      splitCount,
+    },
+  };
 }

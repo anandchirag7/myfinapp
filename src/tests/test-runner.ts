@@ -10,6 +10,12 @@ import { registerQueryKeysTests } from "./query-keys.test";
 import { registerFinanceMathTests } from "./finance-math.test";
 import { registerObservabilityTests } from "./observability.test";
 import { registerInvestmentsCalcTests } from "./investments-calc.test";
+import { registerOllamaTests } from "./ollama.test";
+import { registerStatementReleaseBTests } from "./statement-release-b.test";
+import { registerStatementReleaseCTests } from "./statement-release-c.test";
+import { registerStatementReleaseDTests } from "./statement-release-d.test";
+import { registerStatementReleaseETests } from "./statement-release-e.test";
+import { registerBatchRecoveryTests } from "./batch-recovery.test";
 
 async function main() {
   console.log("\n🧪 Running Paisa Regression & Verification Test Suite (Phase 4)\n");
@@ -22,6 +28,12 @@ async function main() {
   registerFinanceMathTests();
   registerObservabilityTests();
   registerInvestmentsCalcTests();
+  registerOllamaTests();
+  registerStatementReleaseBTests();
+  registerStatementReleaseCTests();
+  registerStatementReleaseDTests();
+  registerStatementReleaseETests();
+  registerBatchRecoveryTests();
 
   const summary = await runTests();
 

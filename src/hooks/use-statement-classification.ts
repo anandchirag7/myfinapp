@@ -2,7 +2,18 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 
 export type ClassificationProgress = {
-  status: "parsing" | "deduplicating" | "classifying" | "complete" | "failed" | null;
+  status:
+    | "parsing"
+    | "deduplicating"
+    | "classifying"
+    | "queued"
+    | "running"
+    | "partial"
+    | "retrying"
+    | "complete"
+    | "failed"
+    | "cancelled"
+    | null;
   resolved: Record<string, { payee: string; category: string | null; source: string }>;
   processed: number;
   total: number;
@@ -70,7 +81,14 @@ export function useStatementClassification(uploadId: string | null): Classificat
     // Safety net: poll until the job finishes even if realtime is unavailable.
     const timer = setInterval(async () => {
       const status = await load();
-      if (status === "complete" || status === "failed") clearInterval(timer);
+      if (
+        status === "complete" ||
+        status === "partial" ||
+        status === "failed" ||
+        status === "cancelled"
+      ) {
+        clearInterval(timer);
+      }
     }, 4000);
 
     return () => {
