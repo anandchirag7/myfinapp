@@ -314,3 +314,23 @@ export function titleCase(s: string): string {
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(" ");
 }
+
+/** Clean learned names that accidentally contain a complete payment-rail
+ * narration. Ordinary user-entered names are deliberately left untouched. */
+export function cleanPayeeDisplayName(raw: string): string {
+  const input = String(raw ?? "").trim();
+  if (!/^(?:UPI|NEFT|IMPS|RTGS|ACH)[\s\-/:]/i.test(input)) return input;
+  const parts = normalizePattern(input).split(/\s+/).filter(Boolean);
+  const kept: string[] = [];
+  for (const part of parts) {
+    const compact = part.replace(/[^A-Z0-9]/gi, "").toUpperCase();
+    const previous = kept.slice(-3).map((value) => value.replace(/[^A-Z0-9]/gi, "").toUpperCase());
+    let duplicate = false;
+    for (let size = 2; size <= previous.length; size++) {
+      const window = previous.slice(-size);
+      if (compact === window.join("") || compact === [...window].reverse().join("")) { duplicate = true; break; }
+    }
+    if (!duplicate) kept.push(part);
+  }
+  return titleCase(kept.join(" ")) || input;
+}

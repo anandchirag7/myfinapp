@@ -60,6 +60,13 @@ import {
 import { supabase } from "@/integrations/supabase/client";
 import { StatementImportDialog } from "@/components/statement-import-dialog";
 import { FastEntryDialog } from "@/components/fast-entry-dialog";
+import { CategoryTypeBadge } from "@/components/category-type-badge";
+import {
+  getCategoryTypeLabel,
+  resolveCategoryType,
+  resolveSplitCategoryType,
+  type CategoryKind,
+} from "@/lib/category-type";
 
 export const Route = createFileRoute("/_authenticated/transactions")({
   validateSearch: (search: Record<string, unknown>) => ({
@@ -84,12 +91,20 @@ type Txn = {
   cleared_status: "pending" | "cleared" | "reconciled";
   is_flagged: boolean; is_favorite: boolean; is_reviewed: boolean; is_read: boolean;
   attachment_count: number; comment_count: number; created_at: string;
-  category?: { id: string; name: string; kind: string; color: string | null; icon: string | null } | null;
+  category?: { id: string; name: string; kind: CategoryKind; color: string | null; icon: string | null } | null;
   account?: { id: string; name: string; currency: string; institution: string | null } | null;
   transfer_account?: { id: string; name: string } | null;
 };
 
 type RangePreset = "today" | "7d" | "30d" | "month" | "quarter" | "ytd" | "custom";
+type BreakdownDimension = "category" | "merchant" | "tag" | "account";
+
+const BREAKDOWN_DIMENSION_LABELS: Record<BreakdownDimension, { singular: string; plural: string }> = {
+  category: { singular: "Category", plural: "categories" },
+  merchant: { singular: "Merchant", plural: "merchants" },
+  tag: { singular: "Tag", plural: "tags" },
+  account: { singular: "Account", plural: "accounts" },
+};
 
 const RANGE_LABELS: Record<RangePreset, string> = {
   today: "Today", "7d": "Last 7 days", "30d": "Last 30 days",
@@ -106,6 +121,7 @@ const COL_DEFS = [
   { key: "date", label: "Date", default: true, width: 100 },
   { key: "merchant", label: "Merchant", default: true, width: 220 },
   { key: "category", label: "Category", default: true, width: 180 },
+  { key: "categoryType", label: "Category type", default: true, width: 120 },
   { key: "account", label: "Account", default: true, width: 140 },
   { key: "payment", label: "Payment", default: false, width: 120 },
   { key: "tags", label: "Tags", default: false, width: 140 },
@@ -113,6 +129,21 @@ const COL_DEFS = [
   { key: "amount", label: "Amount", default: true, width: 130 },
 ] as const;
 type ColKey = (typeof COL_DEFS)[number]["key"];
+
+function normalizeColumnOrder(value: unknown): ColKey[] {
+  const validKeys = new Set<ColKey>(COL_DEFS.map((column) => column.key));
+  const saved = Array.isArray(value)
+    ? value.filter((key): key is ColKey => typeof key === "string" && validKeys.has(key as ColKey))
+    : [];
+  const order = [...new Set(saved)];
+  for (const column of COL_DEFS) {
+    if (order.includes(column.key)) continue;
+    const categoryIndex = order.indexOf("category");
+    if (column.key === "categoryType" && categoryIndex >= 0) order.splice(categoryIndex + 1, 0, column.key);
+    else order.push(column.key);
+  }
+  return order;
+}
 
 /* ------------------------------- root --------------------------------- */
 
@@ -177,7 +208,7 @@ function TransactionsWorkspace() {
   const [hasAttachment, setHasAttachment] = useState<"any" | "yes" | "no">("any");
   const [minAmt, setMinAmt] = useState<string>("");
   const [maxAmt, setMaxAmt] = useState<string>("");
-  const [dimension, setDimension] = useState<"category" | "merchant" | "tag" | "account">("category");
+  const [dimension, setDimension] = useState<BreakdownDimension>("category");
   const [chartMode, setChartMode] = useState<"donut" | "bar" | "trend">("donut");
 
   useEffect(() => {
@@ -224,7 +255,7 @@ function TransactionsWorkspace() {
   );
   const [colOrder, setColOrder] = useState<ColKey[]>(() => COL_DEFS.map((c) => c.key as ColKey));
 
-  const [sortKey, setSortKey] = useState<"date" | "amount" | "merchant" | "category">("date");
+  const [sortKey, setSortKey] = useState<"date" | "amount" | "merchant" | "category" | "categoryType">("date");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
   // ---- selection & expansion
@@ -257,10 +288,15 @@ function TransactionsWorkspace() {
       if (sortKey === "amount") return (Number(a.amount) - Number(b.amount)) * dir;
       if (sortKey === "merchant") return (a.merchant ?? "").localeCompare(b.merchant ?? "") * dir;
       if (sortKey === "category") return (a.category?.name ?? "").localeCompare(b.category?.name ?? "") * dir;
+      if (sortKey === "categoryType") {
+        const aType = getCategoryTypeLabel(resolveSplitCategoryType(a, childSplitsMap.get(a.id)));
+        const bType = getCategoryTypeLabel(resolveSplitCategoryType(b, childSplitsMap.get(b.id)));
+        return aType.localeCompare(bType) * dir;
+      }
       return 0;
     });
     return arr;
-  }, [list, sortKey, sortDir]);
+  }, [list, sortKey, sortDir, childSplitsMap]);
 
   const parentTxnsSorted = useMemo(() => {
     return sorted.filter((t: any) => !t.split_parent_id);
@@ -335,9 +371,10 @@ function TransactionsWorkspace() {
 
   // ---- export
   const exportCsv = () => {
-    const header = ["Date", "Merchant", "Category", "Account", "Type", "Amount", "Cleared", "Note"];
+    const header = ["Date", "Merchant", "Category", "Category Type", "Account", "Type", "Amount", "Cleared", "Note"];
     const rows = sorted.map((t) => [
-      t.txn_date, t.merchant ?? "", t.category?.name ?? "", t.account?.name ?? "",
+      t.txn_date, t.merchant ?? "", t.category?.name ?? "",
+      getCategoryTypeLabel(resolveSplitCategoryType(t, childSplitsMap.get(t.id))), t.account?.name ?? "",
       t.type, String(t.amount), t.cleared_status, (t.note ?? "").replace(/[\r\n,]/g, " "),
     ]);
     const csv = [header, ...rows].map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
@@ -361,7 +398,7 @@ function TransactionsWorkspace() {
     if (layout.visible) setVisibleCols(new Set(layout.visible));
     if (layout.density) setDensity(layout.density);
     if (layout.widths) setColWidths((w) => ({ ...w, ...layout.widths }));
-    if (layout.order) setColOrder(layout.order);
+    if (layout.order) setColOrder(normalizeColumnOrder(layout.order));
     toast.success(`Loaded "${v.name}"`);
   };
 
@@ -483,7 +520,7 @@ function TransactionsWorkspace() {
             }}
             className="lg:col-span-5"
           />
-          <BreakdownList data={analytics.breakdown} loading={isLoading} className="lg:col-span-3" />
+          <BreakdownList data={analytics.breakdown} dimension={dimension} loading={isLoading} className="lg:col-span-3" />
         </div>
 
         {/* --------- Data grid --------- */}
@@ -521,7 +558,7 @@ function TransactionsWorkspace() {
                   </th>
                   {colOrder.filter((k) => visibleCols.has(k)).map((key) => {
                     const def = COL_DEFS.find((c) => c.key === key)!;
-                    const sortable = key === "date" || key === "amount" || key === "merchant" || key === "category";
+                    const sortable = key === "date" || key === "amount" || key === "merchant" || key === "category" || key === "categoryType";
                     return (
                       <th
                         key={key}
@@ -1194,16 +1231,19 @@ function TrendChart({ data }: { data: { name: string; amount: number }[] }) {
 
 /* -------- Breakdown list -------- */
 function BreakdownList({
-  data, loading, className,
+  data, dimension, loading, className,
 }: {
   data: { id: string; name: string; amount: number; count: number; color: string }[];
+  dimension: BreakdownDimension;
   loading: boolean; className?: string;
 }) {
   const total = data.reduce((s, d) => s + d.amount, 0);
   return (
     <div className={cn("rounded-2xl border bg-card p-4 shadow-sm", className)}>
       <div className="flex items-center justify-between">
-        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Top categories</p>
+        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          Top {BREAKDOWN_DIMENSION_LABELS[dimension].plural}
+        </p>
         <span className="text-xs text-muted-foreground">{data.length}</span>
       </div>
       <div className="mt-3 space-y-2 max-h-64 overflow-auto pr-1">
@@ -1328,6 +1368,11 @@ function TxnRow({
                       onPatch={onPatch}
                     />
                   )}
+                </td>
+              );
+              if (k === "categoryType") return (
+                <td key={k} style={{ width: w, minWidth: 110 }} className="px-3 align-middle">
+                  <CategoryTypeBadge resolved={resolveSplitCategoryType(txn, childSplits)} />
                 </td>
               );
               if (k === "account") return (
@@ -1544,6 +1589,7 @@ function InlineExpand({
                   <span className="font-medium text-foreground">
                     {cs.category ? (categoryHierarchyMap?.get(cs.category.id) ?? cs.category.name) : "Uncategorized"}
                   </span>
+                  <CategoryTypeBadge resolved={resolveCategoryType(cs)} className="scale-90" />
                   {cs.memo && <span className="text-muted-foreground text-[11px]">({cs.memo})</span>}
                 </div>
                 <div className="font-semibold tabular-nums text-foreground">
@@ -1733,6 +1779,7 @@ function DetailPanel({ id, onClose }: { id: string; onClose: () => void }) {
           </TabsList>
           <TabsContent value="overview" className="space-y-2 pt-3">
             <DetailRow label="Category" value={t.category?.name ?? "Uncategorized"} />
+            <DetailRow label="Category type" value={<CategoryTypeBadge resolved={resolveCategoryType(t)} />} />
             <DetailRow label="Account" value={t.account?.name ?? "—"} />
             <DetailRow label="Payment method" value={t.payment_method ?? "—"} />
             <DetailRow label="Tax code" value={t.tax_code ?? "—"} />
@@ -1813,7 +1860,7 @@ function DetailPanel({ id, onClose }: { id: string; onClose: () => void }) {
   );
 }
 
-function DetailRow({ label, value }: { label: string; value: string }) {
+function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="flex items-start justify-between gap-3 border-b py-2 last:border-none">
       <span className="text-xs uppercase text-muted-foreground">{label}</span>

@@ -2,6 +2,21 @@
 
 This file tracks all modified and newly created files along with their date of change.
 
+## 2026-09-04
+
+- Added a phased implementation plan for displaying explicit and direction-inferred category types on the Transactions and individual Account register pages, including split handling, sorting, saved views, details, exports, type safety, and verification.
+- `category_type_implement.md`
+- Implemented Category type across the Transactions workspace and individual Account register with explicit category-kind badges, debit/credit inference for uncategorized rows, mixed split handling, sorting, saved-view compatibility, detail displays, CSV exports, and focused regression coverage.
+- `src/lib/category-type.ts`
+- `src/components/category-type-badge.tsx`
+- `src/routes/_authenticated/transactions.tsx`
+- `src/routes/_authenticated/accounts_.$accountId.tsx`
+- `src/tests/category-type.test.ts`
+- `src/tests/test-runner.ts`
+- Fixed the Transactions analytics breakdown header so it follows the selected grouping and displays Top categories, merchants, tags, or accounts as appropriate.
+- Added a detailed phased plan for full transaction editing across Transactions and Account registers, including atomic backend persistence, balance recomputation, optimistic concurrency, and an explicit memorized-payee update/create/reuse workflow when merchant names change.
+- `TRANSACTION_EDIT_IMPLEMENTATION_PLAN.md`
+
 ## 2026-09-03
 
 - Revamped Settings page with modern hero profile banner, Radix tabbed layout (General, Statement & AI, Notifications, Statement Archive, Data & Reset), visual Light/Dark theme mockups, auto-approve threshold presets, and polished notifications.
@@ -9,6 +24,27 @@ This file tracks all modified and newly created files along with their date of c
 - `src/lib/profile.functions.ts`
 - Added comprehensive Firefly III rules engine analysis and implementation plan.
 - `RULES_FEATURE_IMPLEMENTATION_PLAN.md`
+- Added a unified household rules engine with ordered groups, deterministic triggers/actions, ad-hoc and scheduled execution, audit logs, and an idempotent migration of existing payee rules.
+- Added Planning → Rules with natural-language AI classification preferences and deterministic rule creation.
+- Statement imports now apply deterministic rules after normalization and before lookups/AI, then pass bounded natural-language household preferences to the classifier for unmatched rows.
+- Added bearer-authenticated `/api/public/hooks/rules-worker` scheduling support through `RULES_WORKER_SECRET`.
+- Added `supabase_undo.sql`, a narrowly scoped transaction-safe rollback for all database objects and data introduced by the unified Rules migration while preserving the original payee rules and financial records.
+- Expanded deterministic Rules UI and execution support to 19 transaction trigger fields, 13 comparison operators, and 34 Paisa-compatible actions covering descriptions, notes, tags, accounts, transaction types, budgets, payment metadata, status, and review flags.
+- Enlarged and made the Rules editor responsive, with viewport-bounded scrolling, mobile-stacked fields, proportional desktop columns, constrained option menus, truncated long selected labels, and a sticky action footer.
+- Fixed the statement import confirmation dialog overflowing horizontally by widening it responsively, allowing all grids and duplicate rows to shrink, wrapping long match explanations, constraining both scroll axes, and stacking footer actions on narrow screens.
+- Added dynamic multi-condition deterministic rules with numbered condition rows, add/remove controls, per-condition inversion, between-range inputs, and selectable AND/OR matching semantics.
+- Increased the Create Rule dialog desktop width from the 5XL to 6XL breakpoint while retaining its 96vw responsive limit.
+- Widened the deterministic condition matching-mode control and dropdown so the complete AND/OR labels remain visible.
+- Added a Run Now execution modal with immediate feedback, animated phase indicators, progress bar, dry-run scan/match counts, apply and refresh stages, final updated totals, failure details, and per-rule loading state.
+- Added editing for existing deterministic and natural-language rules, preloading group, rule type, every condition, AND/OR behavior, action, timing, and schedule into the shared editor and updating the original rule in place.
+- Made rule editing lossless for multi-action rules by loading, displaying, reordering by saved priority, adding/removing, and resaving the complete ordered action list.
+- Fixed category rule actions accepting visible names such as `Miscellaneous`: names are now resolved to household category UUIDs on save, and legacy name-valued actions are hydrated at execution time.
+- Fixed approved high-confidence statement payees not reaching `memorized_payees`: approval now explicitly marks new clusters for persistence, and preview/commit use the same approved-or-selected eligibility rule.
+- Fixed learned `user_payee_overrides` being mislabeled as existing memorized payees; only a real `memorized_payees` match now sets `isExisting`, while learned names remain high-confidence and eligible to be saved on import.
+- Optimized ad-hoc rule execution by loading rules/categories once, evaluating the full transaction set in memory, applying matched updates in bounded parallel batches, and bulk-inserting audit logs instead of performing database reads and writes sequentially per row.
+- Fixed category-only statement rules replacing payee names with full bank/UPI narrations: deterministic category overrides still take precedence, while normal lookup/AI naming continues unless a rule explicitly changes the merchant/description.
+- Added payment-rail display-name cleanup for learned overrides, including removal of `UPI-` wrappers and concatenated/reversed duplicate handles such as `ABHISHEK ANAND-ANANDABHISHEK`, while preserving ordinary user-entered payee names.
+- Improved LLM-assisted categorization to select validated exact household category names before coarse fallback keys, use narration/type/merchant evidence, honor natural-language preferences, reject invented categories, avoid generic categories when specific evidence exists, and distinguish refunds, salary, investments, transfers, and payment rails more carefully.
 
 ## 2026-09-02
 

@@ -288,14 +288,27 @@ export async function runStatementUpload(opts: {
     }>;
     const userCategoryNames = categories.map((c) => c.name);
 
+    // Household rules run immediately after normalization and before every
+    // learned lookup or AI classifier. A deterministic match always wins.
+    const { applyStatementRules, loadLlmRuleContext } = await import('./rules-engine.server');
+    const categoryNamesById = new Map(categories.map((c) => [c.id, c.name]));
+    const deterministic = await applyStatementRules(supabase, householdId, transactions, categoryNamesById);
+    const llmRuleContext = await loadLlmRuleContext(supabase, householdId);
+    const lookupPatterns = patterns.filter((pattern) => !deterministic.matchedPatterns.has(pattern));
+
     // Resolve with pattern-level category lookups
-    const { resolved, unresolved } = await resolveFromLookups(
+    const lookupResult = await resolveFromLookups(
       supabase,
       userId,
-      patterns,
+      lookupPatterns,
       householdId,
       rollout.resolver.active,
     );
+    const resolved = { ...deterministic.resolved, ...lookupResult.resolved };
+    const unresolved = lookupResult.unresolved;
+    for(const [pattern,category] of Object.entries(deterministic.categoryOverrides)){
+      if(resolved[pattern])resolved[pattern].category=category;
+    }
     let shadowCandidateResolved = Object.keys(resolved).length;
     if (rollout.resolver.shadow && !rollout.resolver.active) {
       const shadowResult = await resolveFromLookups(supabase, userId, patterns, householdId, true);
@@ -370,6 +383,8 @@ export async function runStatementUpload(opts: {
         householdId,
         pending,
         userCategoryNames,
+        llmRuleContext,
+        ruleCategoryOverrides: deterministic.categoryOverrides,
         idempotencyKey,
         resolverVersion: STATEMENT_RESOLVER_VERSION,
         rollout: {
@@ -396,11 +411,15 @@ export async function runStatementUpload(opts: {
           userId,
           pending,
           userCategoryNames,
+          llmRuleContext,
           householdId,
           categoryIndex,
           webEnrichmentEnabled: rollout.web.active,
         });
         Object.assign(resolved, classified.resolved);
+        for(const [pattern,category] of Object.entries(deterministic.categoryOverrides)){
+          if(resolved[pattern])resolved[pattern].category=category;
+        }
         const failedSet = new Set(classified.diagnostics.failedPatterns);
         remainingPending = pending.filter((item) => failedSet.has(item.pattern));
         if (remainingPending.length) classificationStatus = "partial";
@@ -536,10 +555,11 @@ export async function saveCorrections(
   userId: string,
   corrections: Array<{ normalizedPattern: string; payeeName: string; category?: string | null }>,
 ) {
+  const { cleanPayeeDisplayName } = await import("./statement-normalize");
   const overrides = corrections.map((c) => ({
     user_id: userId,
     normalized_pattern: c.normalizedPattern,
-    payee_name: c.payeeName,
+    payee_name: cleanPayeeDisplayName(c.payeeName),
     category: c.category ?? null,
   }));
 

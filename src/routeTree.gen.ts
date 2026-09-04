@@ -16,6 +16,7 @@ import { Route as AuthenticatedIndexRouteImport } from './routes/_authenticated/
 import { Route as ApiChatRouteImport } from './routes/api/chat'
 import { Route as AuthenticatedTransactionsRouteImport } from './routes/_authenticated/transactions'
 import { Route as AuthenticatedSettingsRouteImport } from './routes/_authenticated/settings'
+import { Route as AuthenticatedRulesRouteImport } from './routes/_authenticated/rules'
 import { Route as AuthenticatedReportsRouteImport } from './routes/_authenticated/reports'
 import { Route as AuthenticatedPayeesRouteImport } from './routes/_authenticated/payees'
 import { Route as AuthenticatedInvestmentsRouteImport } from './routes/_authenticated/investments'
@@ -34,6 +35,7 @@ import { Route as Char91DotmcpChar93InvokeToolToolRouteImport } from './routes/[
 import { Route as DotlovableOauthConsentRouteImport } from './routes/[.]lovable.oauth.consent'
 import { Route as ApiPublicHooksStatementWorkerRouteImport } from './routes/api/public/hooks/statement-worker'
 import { Route as ApiPublicHooksStatementClassifyRouteImport } from './routes/api/public/hooks/statement-classify'
+import { Route as ApiPublicHooksRulesWorkerRouteImport } from './routes/api/public/hooks/rules-worker'
 import { Route as ApiPublicHooksBillsWhatsappRemindersRouteImport } from './routes/api/public/hooks/bills-whatsapp-reminders'
 
 const McpRoute = McpRouteImport.update({
@@ -69,6 +71,11 @@ const AuthenticatedTransactionsRoute =
 const AuthenticatedSettingsRoute = AuthenticatedSettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
+const AuthenticatedRulesRoute = AuthenticatedRulesRouteImport.update({
+  id: '/rules',
+  path: '/rules',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
 const AuthenticatedReportsRoute = AuthenticatedReportsRouteImport.update({
@@ -169,6 +176,12 @@ const ApiPublicHooksStatementClassifyRoute =
     path: '/api/public/hooks/statement-classify',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiPublicHooksRulesWorkerRoute =
+  ApiPublicHooksRulesWorkerRouteImport.update({
+    id: '/api/public/hooks/rules-worker',
+    path: '/api/public/hooks/rules-worker',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiPublicHooksBillsWhatsappRemindersRoute =
   ApiPublicHooksBillsWhatsappRemindersRouteImport.update({
     id: '/api/public/hooks/bills-whatsapp-reminders',
@@ -191,6 +204,7 @@ export interface FileRoutesByFullPath {
   '/investments': typeof AuthenticatedInvestmentsRoute
   '/payees': typeof AuthenticatedPayeesRoute
   '/reports': typeof AuthenticatedReportsRoute
+  '/rules': typeof AuthenticatedRulesRoute
   '/settings': typeof AuthenticatedSettingsRoute
   '/transactions': typeof AuthenticatedTransactionsRoute
   '/api/chat': typeof ApiChatRoute
@@ -200,6 +214,7 @@ export interface FileRoutesByFullPath {
   '/chat/$threadId': typeof AuthenticatedChatThreadIdRoute
   '/chat/': typeof AuthenticatedChatIndexRoute
   '/api/public/hooks/bills-whatsapp-reminders': typeof ApiPublicHooksBillsWhatsappRemindersRoute
+  '/api/public/hooks/rules-worker': typeof ApiPublicHooksRulesWorkerRoute
   '/api/public/hooks/statement-classify': typeof ApiPublicHooksStatementClassifyRoute
   '/api/public/hooks/statement-worker': typeof ApiPublicHooksStatementWorkerRoute
 }
@@ -216,6 +231,7 @@ export interface FileRoutesByTo {
   '/investments': typeof AuthenticatedInvestmentsRoute
   '/payees': typeof AuthenticatedPayeesRoute
   '/reports': typeof AuthenticatedReportsRoute
+  '/rules': typeof AuthenticatedRulesRoute
   '/settings': typeof AuthenticatedSettingsRoute
   '/transactions': typeof AuthenticatedTransactionsRoute
   '/api/chat': typeof ApiChatRoute
@@ -226,6 +242,7 @@ export interface FileRoutesByTo {
   '/chat/$threadId': typeof AuthenticatedChatThreadIdRoute
   '/chat': typeof AuthenticatedChatIndexRoute
   '/api/public/hooks/bills-whatsapp-reminders': typeof ApiPublicHooksBillsWhatsappRemindersRoute
+  '/api/public/hooks/rules-worker': typeof ApiPublicHooksRulesWorkerRoute
   '/api/public/hooks/statement-classify': typeof ApiPublicHooksStatementClassifyRoute
   '/api/public/hooks/statement-worker': typeof ApiPublicHooksStatementWorkerRoute
 }
@@ -245,6 +262,7 @@ export interface FileRoutesById {
   '/_authenticated/investments': typeof AuthenticatedInvestmentsRoute
   '/_authenticated/payees': typeof AuthenticatedPayeesRoute
   '/_authenticated/reports': typeof AuthenticatedReportsRoute
+  '/_authenticated/rules': typeof AuthenticatedRulesRoute
   '/_authenticated/settings': typeof AuthenticatedSettingsRoute
   '/_authenticated/transactions': typeof AuthenticatedTransactionsRoute
   '/api/chat': typeof ApiChatRoute
@@ -255,6 +273,7 @@ export interface FileRoutesById {
   '/_authenticated/chat/$threadId': typeof AuthenticatedChatThreadIdRoute
   '/_authenticated/chat/': typeof AuthenticatedChatIndexRoute
   '/api/public/hooks/bills-whatsapp-reminders': typeof ApiPublicHooksBillsWhatsappRemindersRoute
+  '/api/public/hooks/rules-worker': typeof ApiPublicHooksRulesWorkerRoute
   '/api/public/hooks/statement-classify': typeof ApiPublicHooksStatementClassifyRoute
   '/api/public/hooks/statement-worker': typeof ApiPublicHooksStatementWorkerRoute
 }
@@ -275,6 +294,7 @@ export interface FileRouteTypes {
     | '/investments'
     | '/payees'
     | '/reports'
+    | '/rules'
     | '/settings'
     | '/transactions'
     | '/api/chat'
@@ -284,6 +304,7 @@ export interface FileRouteTypes {
     | '/chat/$threadId'
     | '/chat/'
     | '/api/public/hooks/bills-whatsapp-reminders'
+    | '/api/public/hooks/rules-worker'
     | '/api/public/hooks/statement-classify'
     | '/api/public/hooks/statement-worker'
   fileRoutesByTo: FileRoutesByTo
@@ -300,6 +321,7 @@ export interface FileRouteTypes {
     | '/investments'
     | '/payees'
     | '/reports'
+    | '/rules'
     | '/settings'
     | '/transactions'
     | '/api/chat'
@@ -310,6 +332,7 @@ export interface FileRouteTypes {
     | '/chat/$threadId'
     | '/chat'
     | '/api/public/hooks/bills-whatsapp-reminders'
+    | '/api/public/hooks/rules-worker'
     | '/api/public/hooks/statement-classify'
     | '/api/public/hooks/statement-worker'
   id:
@@ -328,6 +351,7 @@ export interface FileRouteTypes {
     | '/_authenticated/investments'
     | '/_authenticated/payees'
     | '/_authenticated/reports'
+    | '/_authenticated/rules'
     | '/_authenticated/settings'
     | '/_authenticated/transactions'
     | '/api/chat'
@@ -338,6 +362,7 @@ export interface FileRouteTypes {
     | '/_authenticated/chat/$threadId'
     | '/_authenticated/chat/'
     | '/api/public/hooks/bills-whatsapp-reminders'
+    | '/api/public/hooks/rules-worker'
     | '/api/public/hooks/statement-classify'
     | '/api/public/hooks/statement-worker'
   fileRoutesById: FileRoutesById
@@ -352,6 +377,7 @@ export interface RootRouteChildren {
   DotlovableOauthConsentRoute: typeof DotlovableOauthConsentRoute
   Char91DotmcpChar93InvokeToolToolRoute: typeof Char91DotmcpChar93InvokeToolToolRoute
   ApiPublicHooksBillsWhatsappRemindersRoute: typeof ApiPublicHooksBillsWhatsappRemindersRoute
+  ApiPublicHooksRulesWorkerRoute: typeof ApiPublicHooksRulesWorkerRoute
   ApiPublicHooksStatementClassifyRoute: typeof ApiPublicHooksStatementClassifyRoute
   ApiPublicHooksStatementWorkerRoute: typeof ApiPublicHooksStatementWorkerRoute
 }
@@ -405,6 +431,13 @@ declare module '@tanstack/react-router' {
       path: '/settings'
       fullPath: '/settings'
       preLoaderRoute: typeof AuthenticatedSettingsRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/rules': {
+      id: '/_authenticated/rules'
+      path: '/rules'
+      fullPath: '/rules'
+      preLoaderRoute: typeof AuthenticatedRulesRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/reports': {
@@ -533,6 +566,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPublicHooksStatementClassifyRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/public/hooks/rules-worker': {
+      id: '/api/public/hooks/rules-worker'
+      path: '/api/public/hooks/rules-worker'
+      fullPath: '/api/public/hooks/rules-worker'
+      preLoaderRoute: typeof ApiPublicHooksRulesWorkerRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/public/hooks/bills-whatsapp-reminders': {
       id: '/api/public/hooks/bills-whatsapp-reminders'
       path: '/api/public/hooks/bills-whatsapp-reminders'
@@ -566,6 +606,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedInvestmentsRoute: typeof AuthenticatedInvestmentsRoute
   AuthenticatedPayeesRoute: typeof AuthenticatedPayeesRoute
   AuthenticatedReportsRoute: typeof AuthenticatedReportsRoute
+  AuthenticatedRulesRoute: typeof AuthenticatedRulesRoute
   AuthenticatedSettingsRoute: typeof AuthenticatedSettingsRoute
   AuthenticatedTransactionsRoute: typeof AuthenticatedTransactionsRoute
   AuthenticatedIndexRoute: typeof AuthenticatedIndexRoute
@@ -582,6 +623,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedInvestmentsRoute: AuthenticatedInvestmentsRoute,
   AuthenticatedPayeesRoute: AuthenticatedPayeesRoute,
   AuthenticatedReportsRoute: AuthenticatedReportsRoute,
+  AuthenticatedRulesRoute: AuthenticatedRulesRoute,
   AuthenticatedSettingsRoute: AuthenticatedSettingsRoute,
   AuthenticatedTransactionsRoute: AuthenticatedTransactionsRoute,
   AuthenticatedIndexRoute: AuthenticatedIndexRoute,
@@ -603,6 +645,7 @@ const rootRouteChildren: RootRouteChildren = {
   Char91DotmcpChar93InvokeToolToolRoute: Char91DotmcpChar93InvokeToolToolRoute,
   ApiPublicHooksBillsWhatsappRemindersRoute:
     ApiPublicHooksBillsWhatsappRemindersRoute,
+  ApiPublicHooksRulesWorkerRoute: ApiPublicHooksRulesWorkerRoute,
   ApiPublicHooksStatementClassifyRoute: ApiPublicHooksStatementClassifyRoute,
   ApiPublicHooksStatementWorkerRoute: ApiPublicHooksStatementWorkerRoute,
 }

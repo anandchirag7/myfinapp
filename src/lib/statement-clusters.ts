@@ -405,7 +405,9 @@ export function buildClusters(opts: {
       }
     }
 
-    // Strict priority: Existing Saved Payee > User Override Hit > Dictionary Hit > AI Hit > Pattern Fallback
+    // A learned user override recognizes the identity, but it is not evidence
+    // that a memorized_payees row exists. Only an actual existing-payee lookup
+    // may set isExisting and suppress persistence during final import.
     const isUserHit = hit?.source === "user" || hit?.source === "alias" || hit?.source === "payee";
     const hasExisting = Boolean(existing);
 
@@ -419,8 +421,7 @@ export function buildClusters(opts: {
       isExisting = true;
     } else if (isUserHit && hit?.payee) {
       name = hit.payee;
-      source = "payee";
-      isExisting = true;
+      source = "alias";
     } else if (hit?.payee) {
       name = hit.payee;
       source = sourceOf(hit.source);

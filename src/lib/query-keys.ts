@@ -4,6 +4,11 @@
  */
 
 export const queryKeys = {
+  rules: {
+    all: ["rules"] as const,
+    groups: () => ["rules", "groups"] as const,
+    detail: (id: string) => ["rules", "detail", id] as const,
+  },
   categories: {
     all: ["categories"] as const,
     full: () => [...queryKeys.categories.all, "full"] as const,

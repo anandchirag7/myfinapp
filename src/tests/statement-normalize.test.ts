@@ -1,5 +1,6 @@
 import { describe, it, expect } from "./test-framework";
 import {
+  cleanPayeeDisplayName,
   normalizePattern,
   lookupKeys,
   titleCase,
@@ -31,6 +32,11 @@ export function registerStatementNormalizeTests() {
       expect(pattern4).toBe("INDMONEY");
     });
 
+    it("cleans UPI wrappers and reversed duplicate handles from learned payee names", () => {
+      expect(cleanPayeeDisplayName("UPI-ABHISHEK ANAND-ANANDABHISHEK")).toBe("Abhishek Anand");
+      expect(cleanPayeeDisplayName("Abhishek Anand")).toBe("Abhishek Anand");
+    });
+
     it("strips banking noise tokens and reference IDs", () => {
       const raw = "NEFT CR-CITIN0000001-TECH MAHINDRA LTD-SALARY APR 2026";
       const normalized = normalizePattern(raw);
@@ -48,7 +54,7 @@ export function registerStatementNormalizeTests() {
       expect(finzoomersKeys).toContain("FINZOOMERS CF");
     });
 
-    it("ensures buildClusters strictly prioritizes existing saved memorized payees", () => {
+      it("ensures buildClusters strictly prioritizes existing saved memorized payees", () => {
       const txns = [
         {
           key: "t1",
@@ -86,8 +92,35 @@ export function registerStatementNormalizeTests() {
       expect(clusters[0].name).toBe("Indmoney");
       expect(clusters[0].isExisting).toBe(true);
       expect(clusters[0].status).toBe("auto");
-      expect(clusters[0].category_id).toBe("cat-investments");
-    });
+        expect(clusters[0].category_id).toBe("cat-investments");
+      });
+
+      it("does not treat a learned user override as an existing memorized payee", () => {
+        const clusters = buildClusters({
+          transactions: [{
+            key: "t1",
+            date: "2026-09-01",
+            description: "LOCAL CORNER STORE",
+            amount: 250,
+            type: "expense" as const,
+            pattern: "LOCAL CORNER STORE",
+          }],
+          resolved: {
+            "LOCAL CORNER STORE": {
+              payee: "Local Corner Store",
+              category: "Miscellaneous",
+              source: "user",
+            },
+          },
+          existingPayees: [],
+          categoryIdByName: new Map([["miscellaneous", "cat-misc"]]),
+        });
+
+        expect(clusters[0].isExisting).toBe(false);
+        expect(clusters[0].existingPayeeId).toBe(null);
+        expect(clusters[0].saveAsPayee).toBe(true);
+        expect(clusters[0].source).toBe("alias");
+      });
 
     it("formats merchant titles cleanly", () => {
       expect(titleCase("SWIGGY INSTAMART")).toBe("Swiggy Instamart");

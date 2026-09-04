@@ -1445,6 +1445,7 @@ export function ConfirmStep({
                   ...c,
                   status: "approved" as ClusterStatus,
                   category_id: approvedMap.get(c.id) ?? c.category_id,
+                  saveAsPayee: !c.isExisting,
                 };
               }
               return c;

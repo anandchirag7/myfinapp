@@ -10,6 +10,8 @@ export type StatementQueueMessage = {
   householdId: string;
   pending: PendingPattern[];
   userCategoryNames: string[];
+  llmRuleContext: string[];
+  ruleCategoryOverrides: Record<string,string>;
   idempotencyKey: string;
   resolverVersion: string;
   rollout: {
@@ -75,10 +77,14 @@ export async function processOneStatementClassification(admin: any) {
       userId: message.userId,
       pending: message.pending,
       userCategoryNames: message.userCategoryNames,
+      llmRuleContext: message.llmRuleContext,
       householdId: message.householdId,
       categoryIndex,
       webEnrichmentEnabled: message.rollout.webActive,
     });
+    for(const [pattern,category] of Object.entries(message.ruleCategoryOverrides??{})){
+      if(classified.resolved[pattern])classified.resolved[pattern].category=category;
+    }
     const previous = (upload.result ?? {}) as Record<string, any>;
     const resolved = { ...(previous.resolved ?? {}), ...classified.resolved };
     const remaining = classified.diagnostics.failedPatterns;

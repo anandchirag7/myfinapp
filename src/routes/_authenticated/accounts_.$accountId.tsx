@@ -47,6 +47,8 @@ import {
 import { AccountFormDialog } from "@/components/account-form-dialog";
 import { FastEntryDialog } from "@/components/fast-entry-dialog";
 import { AccountResetDialog } from "@/components/data-reset-dialog";
+import { CategoryTypeBadge } from "@/components/category-type-badge";
+import { getCategoryTypeLabel, resolveCategoryType, type CategoryKind } from "@/lib/category-type";
 
 
 export const Route = createFileRoute("/_authenticated/accounts_/$accountId")({
@@ -67,7 +69,7 @@ type Txn = {
   cleared_status: "pending" | "cleared" | "reconciled";
   is_flagged: boolean; is_favorite: boolean; is_reviewed: boolean; is_read: boolean;
   attachment_count: number; comment_count: number; created_at: string;
-  category?: { id: string; name: string; kind: string; color?: string | null; icon?: string | null } | null;
+  category?: { id: string; name: string; kind: CategoryKind; color?: string | null; icon?: string | null } | null;
   account?: { id: string; name: string; currency: string; institution?: string | null } | null;
   transfer_account?: { id: string; name: string } | null;
 };
@@ -126,7 +128,7 @@ function AccountRegisterPage() {
   useEffect(() => { const t = setTimeout(() => setDebounced(search), 220); return () => clearTimeout(t); }, [search]);
 
   // ---- register
-  const [sortKey, setSortKey] = useState<"date" | "amount" | "merchant">("date");
+  const [sortKey, setSortKey] = useState<"date" | "amount" | "merchant" | "categoryType">("date");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [detailId, setDetailId] = useState<string | null>(null);
@@ -165,6 +167,7 @@ function AccountRegisterPage() {
       let cmp = 0;
       if (sortKey === "date") cmp = a.txn_date.localeCompare(b.txn_date) || a.created_at.localeCompare(b.created_at);
       else if (sortKey === "amount") cmp = Number(a.amount) - Number(b.amount);
+      else if (sortKey === "categoryType") cmp = getCategoryTypeLabel(resolveCategoryType(a)).localeCompare(getCategoryTypeLabel(resolveCategoryType(b)));
       else cmp = (a.merchant ?? "").localeCompare(b.merchant ?? "");
       return sortDir === "asc" ? cmp : -cmp;
     });
@@ -656,6 +659,7 @@ function AccountRegisterPage() {
                   <DropdownMenuItem onClick={() => setSortKey("date")}>Date</DropdownMenuItem>
                   <DropdownMenuItem onClick={() => setSortKey("amount")}>Amount</DropdownMenuItem>
                   <DropdownMenuItem onClick={() => setSortKey("merchant")}>Merchant</DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setSortKey("categoryType")}>Category type</DropdownMenuItem>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={() => setSortDir(sortDir === "asc" ? "desc" : "asc")}>Toggle direction</DropdownMenuItem>
                 </DropdownMenuContent>
@@ -682,6 +686,7 @@ function AccountRegisterPage() {
                     <th className="px-3 py-2 text-left font-medium">Date</th>
                     <th className="px-3 py-2 text-left font-medium">Merchant / Memo</th>
                     <th className="px-3 py-2 text-left font-medium">Category</th>
+                    <th className="min-w-[120px] px-3 py-2 text-left font-medium">Category type</th>
                     <th className="px-3 py-2 text-left font-medium">Payment</th>
                     <th className="px-3 py-2 text-right font-medium">Withdrawal</th>
                     <th className="px-3 py-2 text-right font-medium">Deposit</th>
@@ -765,7 +770,7 @@ function AccountRegisterPage() {
         transaction={splitTxnTarget}
         existingSplits={splitTxnTarget ? withEmiHierarchy.filter((c: any) => c.split_parent_id === splitTxnTarget.id) : undefined}
         categories={categories as any[]}
-        onSuccess={() => qc.invalidateQueries({ queryKey: ["account-txns"] })}
+        onSuccess={() => qc.invalidateQueries({ queryKey: ["acct-txns"] })}
       />
     </div>
   );
@@ -882,6 +887,9 @@ function RegisterRow({ t, density, selected, onSelect, onOpen, onFlag, onReview,
             </span>
           ) : <span className="text-xs text-muted-foreground italic">Uncategorized</span>}
         </td>
+        <td className={cn("min-w-[120px] px-3", pad)}>
+          <CategoryTypeBadge resolved={resolveCategoryType(t)} />
+        </td>
         <td className={cn("px-3 text-xs text-muted-foreground", pad)}>{t.payment_method ?? "—"}</td>
         <td className={cn("px-3 text-right tabular-nums", pad, t.type === "expense" ? typeColor : "text-muted-foreground/50")}>
           {t.type === "expense" ? formatCurrency(amt, currency) : "—"}
@@ -926,6 +934,9 @@ function RegisterRow({ t, density, selected, onSelect, onOpen, onFlag, onReview,
                   {c.category.name}
                 </span>
               ) : <span className="italic text-muted-foreground">EMI Repayment</span>}
+            </td>
+            <td className="min-w-[120px] px-3 py-2">
+              <CategoryTypeBadge resolved={resolveCategoryType(c)} />
             </td>
             <td className="px-3 py-2 text-muted-foreground">{c.payment_method ?? "—"}</td>
             <td className={cn("px-3 py-2 text-right tabular-nums", c.type === "expense" ? cTypeColor : "text-muted-foreground/40")}>
@@ -1137,6 +1148,7 @@ function DetailSheet({ id, onClose }: { id: string; onClose: () => void }) {
               </div>
               <div className="grid grid-cols-2 gap-2 text-sm">
                 <Field label="Category" value={txn.category?.name ?? "—"} />
+                <Field label="Category type" value={<CategoryTypeBadge resolved={resolveCategoryType(txn)} />} />
                 <Field label="Status" value={txn.cleared_status} />
                 <Field label="Payment" value={txn.payment_method ?? "—"} />
                 <Field label="Reference" value={txn.check_number ?? "—"} />
@@ -1181,7 +1193,7 @@ function DetailSheet({ id, onClose }: { id: string; onClose: () => void }) {
     </Sheet>
   );
 }
-function Field({ label, value }: { label: string; value: string }) {
+function Field({ label, value }: { label: string; value: React.ReactNode }) {
   return <div className="rounded-lg bg-muted/30 p-2"><p className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</p><p className="mt-0.5 truncate">{value}</p></div>;
 }
 
@@ -1255,9 +1267,9 @@ function buildCategorySeries(txns: Txn[]) {
 }
 
 function exportCsv(rows: (Txn & { running: number })[], name: string) {
-  const header = ["date", "type", "merchant", "memo", "category", "payment", "amount", "balance"];
+  const header = ["date", "type", "merchant", "memo", "category", "category_type", "payment", "amount", "balance"];
   const csv = [header.join(",")].concat(
-    rows.map(r => [r.txn_date, r.type, `"${(r.merchant ?? "").replace(/"/g, '""')}"`, `"${(r.memo ?? "").replace(/"/g, '""')}"`, r.category?.name ?? "", r.payment_method ?? "", r.amount, r.running].join(",")),
+    rows.map(r => [r.txn_date, r.type, `"${(r.merchant ?? "").replace(/"/g, '""')}"`, `"${(r.memo ?? "").replace(/"/g, '""')}"`, r.category?.name ?? "", getCategoryTypeLabel(resolveCategoryType(r)), r.payment_method ?? "", r.amount, r.running].join(",")),
   ).join("\n");
   const blob = new Blob([csv], { type: "text/csv" });
   const url = URL.createObjectURL(blob);

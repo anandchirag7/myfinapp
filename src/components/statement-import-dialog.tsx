@@ -990,7 +990,11 @@ export function StatementImportDialog() {
     const payees = new Set(included.map((r) => r.payee).filter(Boolean));
     const uncategorized = included.filter((r) => !r.category_id).length;
     const newPayees = clusters.filter(
-      (c) => c.status !== "ignored" && c.saveAsPayee && !c.isExisting && c.name.trim(),
+      (c) =>
+        c.status !== "ignored" &&
+        !c.isExisting &&
+        c.name.trim() &&
+        (c.saveAsPayee || c.status === "approved"),
     ).length;
     return {
       total: src.length,
@@ -1028,7 +1032,9 @@ export function StatementImportDialog() {
     try {
       const active = clusters.filter((c) => c.status !== "ignored");
       const newPayees = active
-        .filter((c) => c.saveAsPayee && !c.isExisting && c.name.trim())
+        .filter(
+          (c) => !c.isExisting && c.name.trim() && (c.saveAsPayee || c.status === "approved"),
+        )
         .map((c) => ({
           merchant: c.name.trim(),
           category_id: c.category_id ?? null,
@@ -1349,14 +1355,14 @@ export function StatementImportDialog() {
         </div>
 
         <AlertDialog open={!!preview} onOpenChange={(v) => !v && setPreview(null)}>
-          <AlertDialogContent>
+          <AlertDialogContent className="w-[min(94vw,52rem)] max-w-none sm:!max-w-3xl max-h-[90vh] min-w-0 overflow-y-auto overflow-x-hidden p-4 sm:p-6">
             <AlertDialogHeader>
               <AlertDialogTitle>Ready to import</AlertDialogTitle>
               <AlertDialogDescription>
                 Nothing has been written yet. Review what will be saved, then confirm.
               </AlertDialogDescription>
             </AlertDialogHeader>
-            <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-[12px] sm:grid-cols-3">
+            <dl className="grid min-w-0 grid-cols-1 gap-2 text-[12px] xs:grid-cols-2 sm:grid-cols-3">
               {[
                 ["Will be imported", previewSummary.included.toLocaleString()],
                 ["Excluded", previewSummary.excluded.toLocaleString()],
@@ -1368,18 +1374,18 @@ export function StatementImportDialog() {
               ].map(([label, value]) => (
                 <div
                   key={label as string}
-                  className="rounded-[10px] border border-border px-2.5 py-1.5"
+                  className="min-w-0 rounded-[10px] border border-border px-2.5 py-1.5"
                 >
                   <dt className="text-[10px] uppercase tracking-wide text-muted-foreground">
                     {label}
                   </dt>
-                  <dd className="font-medium tabular-nums">{value}</dd>
+                  <dd className="break-words font-medium tabular-nums">{value}</dd>
                 </div>
               ))}
             </dl>
             {(previewSummary.dupOnAccount > 0 || previewSummary.dupInFile > 0) && (
-              <div className="space-y-1.5 rounded-[10px] border border-border bg-muted/40 p-2.5">
-                <p className="flex items-center gap-1.5 text-[11px] font-medium">
+              <div className="min-w-0 space-y-1.5 overflow-hidden rounded-[10px] border border-border bg-muted/40 p-2.5">
+                <p className="flex min-w-0 flex-wrap items-center gap-1.5 text-[11px] font-medium">
                   <ShieldQuestion className="h-3.5 w-3.5 shrink-0" aria-hidden />
                   Why {(
                     previewSummary.dupOnAccount + previewSummary.dupInFile
@@ -1387,30 +1393,30 @@ export function StatementImportDialog() {
                   rows are flagged as duplicates
                   {dupScanning && <span className="text-muted-foreground">· checking…</span>}
                 </p>
-                <p className="text-[11px] text-muted-foreground">
+                <p className="break-words text-[11px] text-muted-foreground">
                   {previewSummary.dupOnAccount.toLocaleString()} already exist on this account ·{" "}
                   {previewSummary.dupInFile.toLocaleString()} repeat inside the file ·{" "}
                   {previewSummary.dupExcluded.toLocaleString()} are excluded from this import.
                 </p>
-                <ul className="max-h-40 space-y-1 overflow-y-auto">
+                <ul className="max-h-48 min-w-0 space-y-1 overflow-y-auto overflow-x-hidden pr-1">
                   {previewSummary.dupSamples.map((r) => (
                     <li
                       key={r.key}
-                      className="rounded-[8px] border border-border bg-background px-2 py-1 text-[11px]"
+                      className="min-w-0 overflow-hidden rounded-[8px] border border-border bg-background px-2 py-1 text-[11px]"
                     >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="truncate font-medium">{r.payee || r.description}</span>
-                        <span className="shrink-0 tabular-nums text-muted-foreground">
+                      <div className="grid min-w-0 grid-cols-1 gap-0.5 sm:grid-cols-[minmax(0,1fr)_auto] sm:gap-2">
+                        <span className="min-w-0 truncate font-medium">{r.payee || r.description}</span>
+                        <span className="min-w-0 break-words tabular-nums text-muted-foreground sm:whitespace-nowrap">
                           {r.date} · {r.amount.toFixed(2)} ·{" "}
                           {Math.round((r.dup?.confidence ?? 0) * 100)}% match
                         </span>
                       </div>
-                      <p className="text-muted-foreground">
+                      <p className="break-words text-muted-foreground">
                         {r.dup?.reason}
                         {r.dup?.matchKeys?.length ? ` — keys: ${r.dup.matchKeys.join(", ")}` : ""}
                       </p>
                       {r.dup?.existing && (
-                        <p className="text-muted-foreground">
+                        <p className="break-words text-muted-foreground">
                           Existing: {r.dup.existing.date} ·{" "}
                           {Number(r.dup.existing.amount).toFixed(2)} ·{" "}
                           {r.dup.existing.merchant || r.dup.existing.note || "—"}
@@ -1443,9 +1449,9 @@ export function StatementImportDialog() {
                 ? "The original file is archived privately, so this import can be audited or re-parsed later."
                 : "The original file is not archived — enable the statements archive in Settings to keep it for audit and re-parse."}
             </p>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Back to review</AlertDialogCancel>
-              <AlertDialogAction onClick={commitSave}>
+            <AlertDialogFooter className="gap-2 sm:space-x-0">
+              <AlertDialogCancel className="w-full sm:w-auto">Back to review</AlertDialogCancel>
+              <AlertDialogAction className="w-full whitespace-normal sm:w-auto" onClick={commitSave}>
                 Import {previewSummary.included.toLocaleString()} transactions
               </AlertDialogAction>
             </AlertDialogFooter>
