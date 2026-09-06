@@ -113,6 +113,127 @@ export const patchTransaction = createServerFn({ method: "POST" })
     return saved;
   });
 
+// ---------- complete edit + merchant memory ----------
+const completePatchSchema = z.object({
+  account_id: z.string().uuid().optional(),
+  transfer_account_id: z.string().uuid().nullable().optional(),
+  category_id: z.string().uuid().nullable().optional(),
+  type: z.enum(["income", "expense", "transfer"]).optional(),
+  amount: z.number().finite().positive().max(9999999999999999.99).optional(),
+  txn_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  merchant: z.string().trim().max(200).nullable().optional(),
+  memo: z.string().trim().max(500).nullable().optional(),
+  note: z.string().trim().max(1000).nullable().optional(),
+  payment_method: z.string().trim().max(80).nullable().optional(),
+  check_number: z.string().trim().max(40).nullable().optional(),
+  tags: z.array(z.string().trim().min(1).max(50)).max(30).optional(),
+  tax_code: z.string().trim().max(80).nullable().optional(),
+  cleared_status: z.enum(["pending", "cleared", "reconciled"]).optional(),
+  is_flagged: z.boolean().optional(),
+  is_favorite: z.boolean().optional(),
+  is_reviewed: z.boolean().optional(),
+}).strict();
+
+const completeUpdateSchema = z.object({
+  id: z.string().uuid(),
+  expected_updated_at: z.string().datetime({ offset: true }),
+  patch: completePatchSchema,
+  merchant_memory: z.object({
+    action: z.enum(["transaction_only", "update_payee", "create_payee", "use_existing_payee"]),
+    payee_id: z.string().uuid().optional(),
+  }).nullable().optional(),
+});
+
+export const updateTransactionComplete = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d: unknown) => completeUpdateSchema.parse(d))
+  .handler(async ({ context, data }) => {
+    const householdId = await getHouseholdId(context);
+    const { data: owned } = await context.supabase
+      .from("transactions")
+      .select("id")
+      .eq("id", data.id)
+      .eq("household_id", householdId)
+      .maybeSingle();
+    if (!owned) throw new Error("Transaction not found in this household.");
+
+    const memory = data.merchant_memory ?? { action: "transaction_only" as const };
+    if ((memory.action === "update_payee" || memory.action === "use_existing_payee") && !memory.payee_id) {
+      throw new Error("Select a memorized payee for this action.");
+    }
+
+    const { data: result, error } = await (context.supabase as any).rpc("update_transaction_complete", {
+      p_transaction_id: data.id,
+      p_expected_updated_at: data.expected_updated_at,
+      p_patch: data.patch,
+      p_memory_action: memory.action,
+      p_payee_id: memory.payee_id ?? null,
+    });
+    if (error) {
+      const message = String(error.message ?? "Transaction update failed");
+      if (error.code === "PGRST202" || message.includes("update_transaction_complete") && message.includes("schema cache")) {
+        throw new Error("The complete transaction update migration is not applied. Apply migration 20260904000000_complete_transaction_edit.sql, then restart the app server.");
+      }
+      if (message.includes("transaction_edit_conflict")) throw new Error("This transaction changed after you opened it. Reload the latest values and try again.");
+      if (message.includes("payee_locked")) throw new Error("The selected memorized payee is locked and cannot be renamed.");
+      if (message.includes("payee_name_conflict")) throw new Error("A memorized payee already uses this merchant name. Choose that existing payee instead.");
+      if (message.includes("split_financial_fields_locked")) throw new Error("Amount, type, and accounts must be changed through the split editor for split transactions.");
+      throw new Error(message || "The transaction could not be saved.");
+    }
+    return result;
+  });
+
+export const findMerchantMemoryCandidates = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d: unknown) => z.object({
+    transactionId: z.string().uuid(),
+    newMerchant: z.string().trim().min(1).max(200),
+  }).parse(d))
+  .handler(async ({ context, data }) => {
+    const householdId = await getHouseholdId(context);
+    const { data: txn, error: txnError } = await context.supabase
+      .from("transactions")
+      .select("merchant, normalized_pattern")
+      .eq("id", data.transactionId)
+      .eq("household_id", householdId)
+      .maybeSingle();
+    if (txnError) throw txnError;
+    if (!txn) throw new Error("Transaction not found in this household.");
+
+    const { data: payees, error } = await context.supabase
+      .from("memorized_payees")
+      .select("id, merchant, aliases, match_tokens, locked, category_id, txn_type")
+      .eq("household_id", householdId)
+      .order("merchant")
+      .limit(1000);
+    if (error) throw error;
+
+    const oldName = String(txn.merchant ?? "").trim().toLocaleLowerCase();
+    const newName = data.newMerchant.trim().toLocaleLowerCase();
+    const pattern = String(txn.normalized_pattern ?? "").trim().toLocaleLowerCase();
+    const ranked = (payees ?? []).map((payee: any) => {
+      const merchant = String(payee.merchant ?? "").trim().toLocaleLowerCase();
+      const aliases = Array.isArray(payee.aliases) ? payee.aliases.map((v: unknown) => String(v).trim().toLocaleLowerCase()) : [];
+      const tokens = Array.isArray(payee.match_tokens) ? payee.match_tokens.map((v: unknown) => String(v).trim().toLocaleLowerCase()) : [];
+      let score = 0;
+      let match: "new_exact" | "old_exact" | "alias" | "pattern" | "none" = "none";
+      if (merchant === newName) { score = 100; match = "new_exact"; }
+      else if (oldName && merchant === oldName) { score = 90; match = "old_exact"; }
+      else if (aliases.includes(newName) || (oldName && aliases.includes(oldName))) { score = 70; match = "alias"; }
+      else if (pattern && (aliases.includes(pattern) || tokens.includes(pattern))) { score = 60; match = "pattern"; }
+      return { ...payee, score, match };
+    }).filter((payee: any) => payee.score > 0).sort((a: any, b: any) => b.score - a.score || a.merchant.localeCompare(b.merchant));
+
+    return {
+      oldMerchant: txn.merchant ?? null,
+      newMerchant: data.newMerchant.trim(),
+      normalizedPattern: txn.normalized_pattern ?? null,
+      candidates: ranked.slice(0, 8),
+      exactOldPayeeId: ranked.find((payee: any) => payee.match === "old_exact")?.id ?? null,
+      exactNewPayeeId: ranked.find((payee: any) => payee.match === "new_exact")?.id ?? null,
+    };
+  });
+
 // ---------- bulk update ----------
 const bulkSchema = z.object({
   ids: z.array(z.string().uuid()).min(1).max(500),
@@ -233,12 +354,13 @@ export const getTransactionDetail = createServerFn({ method: "GET" })
   .inputValidator((d: unknown) => z.object({ id: z.string().uuid() }).parse(d))
   .handler(async ({ context, data }) => {
     const householdId = await getHouseholdId(context);
-    const [{ data: txn }, { data: attachments }, { data: comments }, { data: activity }] = await Promise.all([
+    const [{ data: txn }, { data: attachments }, { data: comments }, { data: activity }, { data: children }] = await Promise.all([
       context.supabase
         .from("transactions")
         .select(
           `*, category:categories(id, name, kind, color, icon),
-           account:accounts!transactions_account_id_fkey(id, name, institution, currency)`,
+           account:accounts!transactions_account_id_fkey(id, name, institution, currency),
+           transfer_account:accounts!transactions_transfer_account_id_fkey(id, name, institution, currency)`,
         )
         .eq("id", data.id)
         .eq("household_id", householdId)
@@ -259,8 +381,13 @@ export const getTransactionDetail = createServerFn({ method: "GET" })
         .eq("transaction_id", data.id)
         .order("created_at", { ascending: false })
         .limit(30),
+      context.supabase
+        .from("transactions")
+        .select("id, amount, category_id")
+        .eq("split_parent_id", data.id)
+        .eq("household_id", householdId),
     ]);
-    return { txn, attachments: attachments ?? [], comments: comments ?? [], activity: activity ?? [] };
+    return { txn, attachments: attachments ?? [], comments: comments ?? [], activity: activity ?? [], children: children ?? [] };
   });
 
 // ---------- comments ----------

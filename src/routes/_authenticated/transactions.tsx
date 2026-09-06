@@ -9,6 +9,7 @@ import {
   MoreHorizontal, ArrowUpRight, ArrowDownRight, ArrowLeftRight, Calendar as CalendarIcon,
   Sparkles, TrendingUp, TrendingDown, Wallet, Receipt, CheckCircle2, AlertTriangle,
   Info, Eye, EyeOff, PieChart as PieIcon, BarChart3, ChevronsUpDown, FileText, Clock,
+  Pencil,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -61,6 +62,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { StatementImportDialog } from "@/components/statement-import-dialog";
 import { FastEntryDialog } from "@/components/fast-entry-dialog";
 import { CategoryTypeBadge } from "@/components/category-type-badge";
+import { TransactionEditDialog } from "@/components/transaction-edit-dialog";
 import {
   getCategoryTypeLabel,
   resolveCategoryType,
@@ -367,6 +369,7 @@ function TransactionsWorkspace() {
   const [colDrawerOpen, setColDrawerOpen] = useState(false);
   const [insightsOpen, setInsightsOpen] = useState(false);
   const [detailId, setDetailId] = useState<string | null>(null);
+  const [editId, setEditId] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
 
   // ---- export
@@ -628,6 +631,7 @@ function TransactionsWorkspace() {
                         setExpanded(next);
                       }}
                       onOpenDetail={() => setDetailId(t.id)}
+                      onEdit={() => setEditId(t.id)}
                       onPatch={(patch) => patchMut.mutate({ id: t.id, patch })}
                       onDelete={() => delMut.mutate(t.id)}
                     />
@@ -790,7 +794,7 @@ function TransactionsWorkspace() {
         {/* --------- Detail panel --------- */}
         <Sheet open={!!detailId} onOpenChange={(o) => !o && setDetailId(null)}>
           <SheetContent side="right" className="w-full sm:max-w-lg overflow-y-auto">
-            {detailId && <DetailPanel id={detailId} onClose={() => setDetailId(null)} />}
+            {detailId && <DetailPanel id={detailId} onClose={() => setDetailId(null)} onEdit={() => { setEditId(detailId); setDetailId(null); }} />}
           </SheetContent>
         </Sheet>
 
@@ -852,6 +856,15 @@ function TransactionsWorkspace() {
         ><Plus className="h-6 w-6" /></Button>
 
         <FastEntryDialog open={addOpen} onOpenChange={setAddOpen} hideTrigger />
+        <TransactionEditDialog
+          open={!!editId}
+          onOpenChange={(open) => !open && setEditId(null)}
+          transactionId={editId}
+          onEditSplit={() => {
+            const transaction = list.find((item) => item.id === editId);
+            if (transaction) { setSplitTxnTarget(transaction); setSplitDialogOpen(true); setEditId(null); }
+          }}
+        />
         <SplitTransactionDialog
           open={splitDialogOpen}
           onOpenChange={setSplitDialogOpen}
@@ -1277,7 +1290,7 @@ function BreakdownList({
 
 /* -------- Row -------- */
 function TxnRow({
-  txn, rowH, cols, colWidths, selected, expanded, categories, categoryHierarchyMap, childSplits, onSplit, onSelect, onToggleExpand, onOpenDetail, onPatch, onDelete,
+  txn, rowH, cols, colWidths, selected, expanded, categories, categoryHierarchyMap, childSplits, onSplit, onSelect, onToggleExpand, onOpenDetail, onEdit, onPatch, onDelete,
 }: {
   txn: Txn; rowH: string; cols: ColKey[]; colWidths: Record<string, number>;
   selected: boolean; expanded: boolean; categories: any[];
@@ -1285,7 +1298,7 @@ function TxnRow({
   childSplits?: Txn[];
   onSplit?: () => void;
   onSelect: (v: boolean) => void; onToggleExpand: () => void;
-  onOpenDetail: () => void; onPatch: (patch: any) => void; onDelete: () => void;
+  onOpenDetail: () => void; onEdit: () => void; onPatch: (patch: any) => void; onDelete: () => void;
 }) {
   const amtTone =
     txn.type === "income" ? "text-success" :
@@ -1425,6 +1438,7 @@ function TxnRow({
                 <IconBtn label="Favorite" onClick={() => onPatch({ is_favorite: !txn.is_favorite })}>
                   <Star className={cn("h-3.5 w-3.5", txn.is_favorite && "fill-warning text-warning")} />
                 </IconBtn>
+                <IconBtn label="Edit transaction" onClick={onEdit}><Pencil className="h-3.5 w-3.5" /></IconBtn>
                 <IconBtn label="Details" onClick={onOpenDetail}><MoreHorizontal className="h-3.5 w-3.5" /></IconBtn>
               </div>
             </td>
@@ -1435,6 +1449,7 @@ function TxnRow({
             <Split className="mr-2 h-4 w-4 text-primary" />
             {hasSplits ? "Edit split categories..." : "Split transaction..."}
           </ContextMenuItem>
+          <ContextMenuItem onClick={onEdit}><Pencil className="mr-2 h-4 w-4" />Edit transaction</ContextMenuItem>
           <ContextMenuItem onClick={onOpenDetail}>Open details</ContextMenuItem>
           <ContextMenuItem onClick={() => onPatch({ is_reviewed: !txn.is_reviewed })}>
             {txn.is_reviewed ? "Mark as unreviewed" : "Mark as reviewed"}
@@ -1685,7 +1700,7 @@ function EmptyGrid({ onAdd }: { onAdd: () => void }) {
 }
 
 /* -------- Detail panel -------- */
-function DetailPanel({ id, onClose }: { id: string; onClose: () => void }) {
+function DetailPanel({ id, onClose, onEdit }: { id: string; onClose: () => void; onEdit: () => void }) {
   const qc = useQueryClient();
   const detailFn = useServerFn(getTransactionDetail);
   const { data, isLoading } = useQuery({
@@ -1749,6 +1764,7 @@ function DetailPanel({ id, onClose }: { id: string; onClose: () => void }) {
           <span className="min-w-0 truncate">{t.merchant ?? "Transaction"}</span>
         </SheetTitle>
         <SheetDescription>{formatDate(t.txn_date)} · {t.account?.name}</SheetDescription>
+        <Button size="sm" variant="outline" className="mt-2 w-fit" onClick={onEdit}><Pencil className="mr-1.5 h-3.5 w-3.5" />Edit transaction</Button>
       </SheetHeader>
       <div className="flex-1 overflow-y-auto py-4">
         <div className={cn(

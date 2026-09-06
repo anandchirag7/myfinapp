@@ -18,6 +18,7 @@ import { registerStatementReleaseETests } from "./statement-release-e.test";
 import { registerBatchRecoveryTests } from "./batch-recovery.test";
 import { registerRulesEngineTests } from "./rules-engine.test";
 import { registerCategoryTypeTests } from "./category-type.test";
+import { registerTransactionEditTests } from "./transaction-edit.test";
 
 async function main() {
   console.log("\n🧪 Running Paisa Regression & Verification Test Suite (Phase 4)\n");
@@ -38,6 +39,7 @@ async function main() {
   registerBatchRecoveryTests();
   registerRulesEngineTests();
   registerCategoryTypeTests();
+  registerTransactionEditTests();
 
   const summary = await runTests();
 

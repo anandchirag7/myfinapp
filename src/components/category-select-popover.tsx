@@ -21,6 +21,8 @@ export type CategoryItem = {
   icon?: string | null;
 };
 
+type CategoryKind = "expense" | "income" | "transfer" | "investment";
+
 /**
  * Builds full hierarchical display label for a category.
  * E.g., "Food & Dining > Restaurants > Fast Food"
@@ -51,6 +53,9 @@ export const CategorySelectPopover = memo(function CategorySelectPopover({
   onCategoryCreated,
   className,
   placeholder,
+  allowedCreateKinds,
+  defaultCreateKind,
+  disabled = false,
 }: {
   categories: CategoryItem[];
   value: string | null;
@@ -58,12 +63,17 @@ export const CategorySelectPopover = memo(function CategorySelectPopover({
   onCategoryCreated?: (newCategory: CategoryItem) => void;
   className?: string;
   placeholder?: string;
+  allowedCreateKinds?: CategoryKind[];
+  defaultCreateKind?: CategoryKind;
+  disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [newCatName, setNewCatName] = useState("");
-  const [newCatKind, setNewCatKind] = useState<"expense" | "income" | "transfer" | "investment">("expense");
+  const creationKinds = allowedCreateKinds?.length ? allowedCreateKinds : ["expense", "income", "transfer", "investment"];
+  const initialKind = defaultCreateKind && creationKinds.includes(defaultCreateKind) ? defaultCreateKind : creationKinds[0];
+  const [newCatKind, setNewCatKind] = useState<CategoryKind>(initialKind);
   const [newCatParentId, setNewCatParentId] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
 
@@ -138,8 +148,9 @@ export const CategorySelectPopover = memo(function CategorySelectPopover({
       variant="outline"
       role="combobox"
       aria-expanded={open}
+      disabled={disabled}
       onClick={() => {
-        if (!open) {
+        if (!disabled && !open) {
           setOpen(true);
           setSearch("");
         }
@@ -158,6 +169,7 @@ export const CategorySelectPopover = memo(function CategorySelectPopover({
   return (
     <>
       <Popover open={open} onOpenChange={(nextOpen) => {
+        if (disabled) return;
         setOpen(nextOpen);
         if (nextOpen) setSearch("");
       }}>
@@ -232,6 +244,7 @@ export const CategorySelectPopover = memo(function CategorySelectPopover({
               className="w-full justify-start h-7 text-xs text-primary font-medium px-2"
               onClick={() => {
                 setOpen(false);
+                setNewCatKind(defaultCreateKind && creationKinds.includes(defaultCreateKind) ? defaultCreateKind : creationKinds[0]);
                 setAddDialogOpen(true);
               }}
             >
@@ -269,16 +282,15 @@ export const CategorySelectPopover = memo(function CategorySelectPopover({
                 <Label className="text-xs">Category Type</Label>
                 <Select
                   value={newCatKind}
-                  onValueChange={(v) => setNewCatKind(v as "expense" | "income" | "transfer" | "investment")}
+                  onValueChange={(v) => setNewCatKind(v as CategoryKind)}
                 >
                   <SelectTrigger className="h-8 text-xs">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="expense">Expense</SelectItem>
-                    <SelectItem value="income">Income</SelectItem>
-                    <SelectItem value="transfer">Transfer</SelectItem>
-                    <SelectItem value="investment">Investment</SelectItem>
+                    {creationKinds.map((kind) => (
+                      <SelectItem key={kind} value={kind}>{kind[0].toUpperCase() + kind.slice(1)}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>

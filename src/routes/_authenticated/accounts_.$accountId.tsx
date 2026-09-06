@@ -10,6 +10,7 @@ import {
   Zap, LayoutGrid, LineChart as LineIcon, BarChart3, PieChart as PieIcon, X, Split,
 } from "lucide-react";
 import { SplitTransactionDialog } from "@/components/split-transaction-dialog";
+import { TransactionEditDialog } from "@/components/transaction-edit-dialog";
 import { toast } from "sonner";
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid,
@@ -132,6 +133,7 @@ function AccountRegisterPage() {
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [detailId, setDetailId] = useState<string | null>(null);
+  const [editTxnId, setEditTxnId] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [editAccountOpen, setEditAccountOpen] = useState(false);
   const [resetOpen, setResetOpen] = useState(false);
@@ -706,6 +708,7 @@ function AccountRegisterPage() {
                         selected={selected.has(t.id)}
                         onSelect={(v) => { const s = new Set(selected); v ? s.add(t.id) : s.delete(t.id); setSelected(s); }}
                         onOpen={() => setDetailId(t.id)}
+                        onEdit={() => setEditTxnId(t.id)}
                         onFlag={() => patchM.mutate({ id: t.id, patch: { is_flagged: !t.is_flagged } })}
                         onReview={() => patchM.mutate({ id: t.id, patch: { is_reviewed: !t.is_reviewed } })}
                         onSplit={() => { setSplitTxnTarget(t); setSplitDialogOpen(true); }}
@@ -752,10 +755,29 @@ function AccountRegisterPage() {
       </div>
 
       {/* ── detail sheet ── */}
-      {detailId && <DetailSheet id={detailId} onClose={() => setDetailId(null)} />}
+      {detailId && (
+        <DetailSheet
+          id={detailId}
+          onClose={() => setDetailId(null)}
+          onEdit={() => { setEditTxnId(detailId); setDetailId(null); }}
+        />
+      )}
 
       {/* ── dialogs ── */}
       <FastEntryDialog open={addOpen} onOpenChange={setAddOpen} hideTrigger />
+      <TransactionEditDialog
+        open={!!editTxnId}
+        onOpenChange={(open) => !open && setEditTxnId(null)}
+        transactionId={editTxnId}
+        onEditSplit={() => {
+          const transaction = withEmiHierarchy.find((item: any) => item.id === editTxnId);
+          if (transaction) {
+            setSplitTxnTarget(transaction);
+            setSplitDialogOpen(true);
+            setEditTxnId(null);
+          }
+        }}
+      />
       <AccountFormDialog open={editAccountOpen} onOpenChange={setEditAccountOpen} initial={account} />
       <AccountResetDialog
         open={resetOpen}
@@ -810,9 +832,9 @@ function Sparkline({ values, tone }: { values: number[]; tone: string }) {
 }
 
 /* ============================== register row ============================== */
-function RegisterRow({ t, density, selected, onSelect, onOpen, onFlag, onReview, onSplit, currency, allTxns = [] }: {
+function RegisterRow({ t, density, selected, onSelect, onOpen, onEdit, onFlag, onReview, onSplit, currency, allTxns = [] }: {
   t: Txn & { running: number; split_parent_id?: string | null }; density: "compact" | "comfortable" | "spacious";
-  selected: boolean; onSelect: (v: boolean) => void; onOpen: () => void;
+  selected: boolean; onSelect: (v: boolean) => void; onOpen: () => void; onEdit: () => void;
   onFlag: () => void; onReview: () => void; onSplit?: () => void; currency: string;
   allTxns?: (Txn & { running: number; split_parent_id?: string | null })[];
 }) {
@@ -900,6 +922,9 @@ function RegisterRow({ t, density, selected, onSelect, onOpen, onFlag, onReview,
         <td className={cn("px-3 text-right tabular-nums font-medium", pad)}>{formatCurrency(t.running, currency)}</td>
         <td className={cn("pr-2", pad)} onClick={(e) => e.stopPropagation()}>
           <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+            <button onClick={onEdit} className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground" title="Edit transaction">
+              <Pencil className="h-3.5 w-3.5" />
+            </button>
             {onSplit && (
               <button onClick={onSplit} className="rounded p-1 hover:bg-accent text-primary" title="Split transaction">
                 <Split className="h-3.5 w-3.5" />
@@ -1112,7 +1137,7 @@ function CommandPanel({ account }: { account: any }) {
 }
 
 /* ============================== detail sheet ============================== */
-function DetailSheet({ id, onClose }: { id: string; onClose: () => void }) {
+function DetailSheet({ id, onClose, onEdit }: { id: string; onClose: () => void; onEdit: () => void }) {
   const getDetail = useServerFn(getTransactionDetail);
   const addC = useServerFn(addComment);
   const patchFn = useServerFn(patchTransaction);
@@ -1134,6 +1159,9 @@ function DetailSheet({ id, onClose }: { id: string; onClose: () => void }) {
         <SheetHeader>
           <SheetTitle>Transaction details</SheetTitle>
           <SheetDescription>Timeline, notes, attachments and activity</SheetDescription>
+          <Button size="sm" variant="outline" className="mt-2 w-fit" onClick={onEdit}>
+            <Pencil className="mr-1.5 h-3.5 w-3.5" />Edit transaction
+          </Button>
         </SheetHeader>
         {isLoading || !txn ? <div className="mt-4 space-y-3"><Skeleton className="h-24" /><Skeleton className="h-40" /></div> : (
           <ScrollArea className="mt-4 h-[calc(100vh-140px)] pr-4">

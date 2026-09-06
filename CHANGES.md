@@ -16,6 +16,20 @@ This file tracks all modified and newly created files along with their date of c
 - Fixed the Transactions analytics breakdown header so it follows the selected grouping and displays Top categories, merchants, tags, or accounts as appropriate.
 - Added a detailed phased plan for full transaction editing across Transactions and Account registers, including atomic backend persistence, balance recomputation, optimistic concurrency, and an explicit memorized-payee update/create/reuse workflow when merchant names change.
 - `TRANSACTION_EDIT_IMPLEMENTATION_PLAN.md`
+- Implemented complete transaction editing from Transactions and individual Account registers with a shared responsive editor, authoritative detail loading, split safeguards, field validation, minimal patches, atomic balance recomputation, optimistic concurrency, audit history, and an explicit memorized-payee update/create/reuse decision when merchants change.
+- Added focused transaction-edit regression tests and a narrowly scoped SQL rollback script.
+- `src/lib/transaction-edit.ts`
+- `src/components/transaction-edit-dialog.tsx`
+- `src/lib/transactions.functions.ts`
+- `src/routes/_authenticated/transactions.tsx`
+- `src/routes/_authenticated/accounts_.$accountId.tsx`
+- `src/tests/transaction-edit.test.ts`
+- `src/tests/test-runner.ts`
+- `supabase/migrations/20260904000000_complete_transaction_edit.sql`
+- `TRANSACTION_EDIT_UNDO.sql`
+- Fixed the complete transaction editor category dropdown to show compatible top-level and child categories directly from the household categories table, including parent-qualified child labels.
+- Made the transaction editor category picker compact and searchable, and added inline category creation with transaction-compatible category types.
+- Made transaction-save progress and failures explicit with pending labels, live status, validation/error toasts, and a clear missing-database-migration diagnosis.
 
 ## 2026-09-03
 
