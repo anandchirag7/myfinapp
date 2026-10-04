@@ -79,24 +79,48 @@ export async function lookupPatternCategoryNames(
   supabase: any,
   householdId: string,
   patterns: string[],
-): Promise<Map<string, string>> {
-  const result = new Map<string, string>();
+): Promise<
+  Map<
+    string,
+    {
+      categoryId: string | null;
+      categoryName: string | null;
+      source: string;
+      confidence: number;
+    }
+  >
+> {
+  const result = new Map<
+    string,
+    {
+      categoryId: string | null;
+      categoryName: string | null;
+      source: string;
+      confidence: number;
+    }
+  >();
   if (!patterns.length) return result;
 
   for (const part of chunk(patterns, 300)) {
     const { data } = await supabase
       .from("payee_pattern_categories")
-      .select("normalized_pattern, category_name, household_id")
+      .select("normalized_pattern, category_id, category_name, household_id, source, confidence")
       .in("normalized_pattern", part)
       .eq("is_active", true)
-      .not("category_name", "is", null)
       .or(`household_id.is.null,household_id.eq.${householdId}`);
 
     for (const row of data ?? []) {
       const existing = result.has(row.normalized_pattern);
       // Household row wins
       if (!existing || row.household_id) {
-        if (row.category_name) result.set(row.normalized_pattern, row.category_name);
+        if (row.category_name || row.category_id) {
+          result.set(row.normalized_pattern, {
+            categoryId: row.category_id ?? null,
+            categoryName: row.category_name ?? null,
+            source: row.source ?? "learned",
+            confidence: Number(row.confidence ?? 0.7),
+          });
+        }
       }
     }
   }

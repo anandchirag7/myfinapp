@@ -11,7 +11,9 @@ export type StatementQueueMessage = {
   pending: PendingPattern[];
   userCategoryNames: string[];
   llmRuleContext: string[];
-  ruleCategoryOverrides: Record<string,string>;
+  guardedCategoryIds: string[];
+  requireP2PReview: boolean;
+  ruleCategoryOverrides: Record<string, string>;
   idempotencyKey: string;
   resolverVersion: string;
   rollout: {
@@ -78,12 +80,14 @@ export async function processOneStatementClassification(admin: any) {
       pending: message.pending,
       userCategoryNames: message.userCategoryNames,
       llmRuleContext: message.llmRuleContext,
+      guardedCategoryIds: message.guardedCategoryIds,
+      requireP2PReview: message.requireP2PReview,
       householdId: message.householdId,
       categoryIndex,
       webEnrichmentEnabled: message.rollout.webActive,
     });
-    for(const [pattern,category] of Object.entries(message.ruleCategoryOverrides??{})){
-      if(classified.resolved[pattern])classified.resolved[pattern].category=category;
+    for (const [pattern, category] of Object.entries(message.ruleCategoryOverrides ?? {})) {
+      if (classified.resolved[pattern]) classified.resolved[pattern].category = category;
     }
     const previous = (upload.result ?? {}) as Record<string, any>;
     const resolved = { ...(previous.resolved ?? {}), ...classified.resolved };
@@ -120,7 +124,7 @@ export async function processOneStatementClassification(admin: any) {
       .from("statement_uploads")
       .update({
         status: remaining.length ? "partial" : "complete",
-        processed_transactions: message.pending.length - remaining.length,
+        processed_transactions: Object.keys(resolved).length,
         failed_patterns: remaining.length,
         heartbeat_at: new Date().toISOString(),
         last_progress_at: new Date().toISOString(),

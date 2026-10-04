@@ -3,6 +3,8 @@ import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { getHouseholdId } from "@/lib/household.server";
 import { createOllamaClient } from "./ollama.server";
+import { parseManualCategoryAssignments } from "./statement-classification-policy";
+import { buildTransferEvidenceDescriptor, transactionInsertFields } from "./statement-transfers";
 import {
   extractRowsFromAOA,
   parsePdfWithAI,
@@ -588,7 +590,7 @@ export const extractStatementRows = createServerFn({ method: "POST" })
       }
       extracted = extractRowsFromAOA(aoa);
     } else if (isPdf) {
-      await createOllamaClient().preflight();
+      await createOllamaClient().checkAvailability();
       const categoryList = (cats ?? []).map((c: any) => c.name).join(", ");
       const { transactions } = await parsePdfWithAI(
         data.base64,
@@ -773,61 +775,71 @@ export const categorizePayeeClusters = createServerFn({ method: "POST" })
     const lines = data.clusters
       .map((cluster, index) => `${index}| ${cluster.name} | ${cluster.sample.slice(0, 180)}`)
       .join("\n");
-    const response = await createOllamaClient().chat(
+    const responseSchema = z.object({
+      results: z.array(
+        z.object({
+          index: z.number().int().nonnegative(),
+          category_name: z.string().nullable(),
+          confidence: z.number().min(0).max(1),
+          reason_code: z
+            .enum(["known_merchant", "narration_evidence", "household_rule", "uncertain"])
+            .optional(),
+        }),
+      ),
+    });
+    const parsed = await createOllamaClient().chatJson(
       [
         {
           role: "system",
-          content: `Categorize Indian bank-statement payees. Choose exactly one category from this list for every input: ${data.categoryNames.join(", ")}.
-Return ONLY JSON in this shape: { "categories": { "<index>": "<exact category name>" } }.
-Do not invent category names. Use the payee and raw narration together. If uncertain, choose the closest broad category from the list.`,
+          content: `Categorize Indian bank-statement payees using only this category list: ${data.categoryNames.join(", ")}.
+Return ONLY JSON in this shape: { "results": [{ "index": 0, "category_name": "<exact category name or null>", "confidence": 0.0, "reason_code": "known_merchant|narration_evidence|household_rule|uncertain" }] }.
+Do not invent category names. Use the payee and raw narration together. Return null with confidence below 0.75 when evidence is insufficient; never force a broad category.`,
         },
         { role: "user", content: lines },
       ],
-      {
-        format: "json",
-        temperature: 0,
-        numPredict: Math.min(8000, Math.max(1200, data.clusters.length * 24)),
-      },
+      responseSchema,
+      { numPredict: Math.min(8000, Math.max(1200, data.clusters.length * 40)) },
     );
-    const content = response.message?.content ?? "{}";
-    let parsed: any;
-    try {
-      parsed = JSON.parse(content);
-    } catch {
-      parsed = salvageJson(content) ?? {};
-    }
-
-    const allowed = new Map(data.categoryNames.map((name) => [name.toLowerCase(), name]));
-    const categories: Record<number, string> = {};
-    for (const [key, value] of Object.entries(parsed?.categories ?? {})) {
-      const index = Number(key);
-      const category = allowed.get(
-        String(value ?? "")
-          .trim()
-          .toLowerCase(),
-      );
-      if (Number.isInteger(index) && index >= 0 && index < data.clusters.length && category) {
-        categories[index] = category;
-      }
-    }
-
-    return { categories };
+    return {
+      assignments: parseManualCategoryAssignments(parsed, data.categoryNames, data.clusters.length),
+    };
   });
 
 const bulkInput = z.object({
   accountId: z.string().uuid(),
   transactions: z
     .array(
-      z.object({
-        txn_date: z.string(),
-        amount: z.number().positive(),
-        type: z.enum(["income", "expense", "transfer"]),
-        category_id: z.string().uuid().nullable().optional(),
-        merchant: z.string().max(200).nullable().optional(),
-        note: z.string().max(500).optional().nullable(),
-        split_parent_id: z.string().uuid().nullable().optional(),
-        transfer_account_id: z.string().uuid().nullable().optional(),
-      }),
+      z
+        .object({
+          txn_date: z.string(),
+          amount: z.number().positive(),
+          type: z.enum(["income", "expense", "transfer"]),
+          category_id: z.string().uuid().nullable().optional(),
+          merchant: z.string().max(200).nullable().optional(),
+          note: z.string().max(500).optional().nullable(),
+          split_parent_id: z.string().uuid().nullable().optional(),
+          transfer_account_id: z.string().uuid().nullable().optional(),
+          statement_direction: z.enum(["debit", "credit"]).optional(),
+          normalized_pattern: z.string().max(240).optional(),
+          statement_row_key: z.string().max(200).optional(),
+        })
+        .superRefine((transaction, ctx) => {
+          if (transaction.type !== "transfer") return;
+          if (!transaction.transfer_account_id) {
+            ctx.addIssue({
+              code: "custom",
+              path: ["transfer_account_id"],
+              message: "Internal transfers require another account",
+            });
+          }
+          if (!transaction.statement_direction) {
+            ctx.addIssue({
+              code: "custom",
+              path: ["statement_direction"],
+              message: "Internal transfers require a statement direction",
+            });
+          }
+        }),
     )
     .min(1)
     .max(10000),
@@ -869,6 +881,12 @@ function matchTokensFor(name: string, aliases: string[]): string[] {
   return Array.from(bag);
 }
 
+async function sha256Hex(value: string): Promise<string> {
+  const bytes = new TextEncoder().encode(value);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 export const bulkInsertTransactions = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => bulkInput.parse(d))
@@ -895,6 +913,33 @@ export const bulkInsertTransactions = createServerFn({ method: "POST" })
         };
       }
       claimedUploadId = (upload?.id as string) ?? data.uploadId ?? null;
+    }
+
+    const transferTxns = data.transactions.filter((transaction) => transaction.type === "transfer");
+    if (transferTxns.length) {
+      const accountIds = Array.from(
+        new Set([
+          data.accountId,
+          ...transferTxns.map((transaction) => transaction.transfer_account_id!),
+        ]),
+      );
+      const { data: transferAccounts, error: accountError } = await context.supabase
+        .from("accounts")
+        .select("id, currency")
+        .eq("household_id", householdId)
+        .in("id", accountIds);
+      if (accountError) throw accountError;
+      if ((transferAccounts?.length ?? 0) !== accountIds.length) {
+        throw new Error("Every internal-transfer account must belong to this household.");
+      }
+      const currencies = new Set(
+        (transferAccounts ?? []).map((account) => account.currency ?? "INR"),
+      );
+      if (currencies.size > 1) {
+        throw new Error(
+          "Cross-currency internal transfers need both source and destination amounts and are not imported automatically yet.",
+        );
+      }
     }
 
     // ---- Payee alias learning ----
@@ -983,7 +1028,9 @@ export const bulkInsertTransactions = createServerFn({ method: "POST" })
 
     // ---- Transaction inserts & EMI Hierarchy linking ----
     const batchId = data.importToken ?? crypto.randomUUID();
-    const rawTxns = [...data.transactions];
+    const rawTxns = data.transactions.filter((transaction) => transaction.type !== "transfer");
+    let createdTransfers = 0;
+    let reconciledTransfers = 0;
 
     const cleanStr = (s: string) => (s ?? "").replace(/[^a-zA-Z0-9]+/g, " ").toUpperCase();
 
@@ -1041,6 +1088,52 @@ export const bulkInsertTransactions = createServerFn({ method: "POST" })
     }
 
     try {
+      // Internal transfers are canonical rows: source account is debited and
+      // destination account is credited. A second statement reconciles to the
+      // same row by account pair, amount and a three-day posting window.
+      for (const transaction of transferTxns) {
+        const direction = transaction.statement_direction!;
+        const descriptor = buildTransferEvidenceDescriptor({
+          accountId: data.accountId,
+          date: transaction.txn_date,
+          amount: transaction.amount,
+          direction,
+          description:
+            transaction.note ?? transaction.merchant ?? transaction.normalized_pattern ?? "",
+          rowKey: transaction.statement_row_key,
+        });
+        const rowFingerprint = await sha256Hex(descriptor);
+        const { data: resolved, error } = await context.supabase.rpc(
+          "resolve_statement_internal_transfer",
+          {
+            p_household_id: householdId,
+            p_user_id: context.userId,
+            p_statement_account_id: data.accountId,
+            p_counterparty_account_id: transaction.transfer_account_id!,
+            p_direction: direction,
+            p_amount: transaction.amount,
+            p_txn_date: transaction.txn_date,
+            p_merchant: transaction.merchant ?? "",
+            p_note: transaction.note ?? "",
+            p_normalized_pattern: transaction.normalized_pattern ?? "",
+            p_row_fingerprint: rowFingerprint,
+            p_statement_upload_id: claimedUploadId,
+            p_import_batch_id: batchId,
+          },
+        );
+        if (error) {
+          if (error.message.includes("ambiguous_internal_transfer_match")) {
+            throw new Error(
+              `Multiple existing transfers match ${transaction.txn_date} ${transaction.amount}. Review the duplicate transfers before importing this row.`,
+            );
+          }
+          throw error;
+        }
+        const result = resolved?.[0];
+        if (result?.created) createdTransfers++;
+        else reconciledTransfers++;
+      }
+
       // 1. Separate parents and standalone transactions from children that require split_parent_id
       const childIndices = new Set<number>();
       emiGroups.forEach((children) => children.forEach((c) => childIndices.add(c)));
@@ -1053,7 +1146,7 @@ export const bulkInsertTransactions = createServerFn({ method: "POST" })
           parentIndexMap.set(idx, parentTxns.length);
           const isEmiParent = emiGroups.has(idx);
           parentTxns.push({
-            ...t,
+            ...transactionInsertFields(t),
             account_id: data.accountId,
             household_id: householdId,
             created_by: context.userId,
@@ -1091,7 +1184,7 @@ export const bulkInsertTransactions = createServerFn({ method: "POST" })
           childrenIndices.forEach((cIdx) => {
             const t = rawTxns[cIdx];
             childTxns.push({
-              ...t,
+              ...transactionInsertFields(t),
               account_id: data.accountId,
               household_id: householdId,
               created_by: context.userId,
@@ -1110,7 +1203,21 @@ export const bulkInsertTransactions = createServerFn({ method: "POST" })
       }
     } catch (e: any) {
       // All-or-nothing: roll back
+      await context.supabase
+        .from("transaction_statement_evidence")
+        .delete()
+        .eq("import_batch_id", batchId);
       await context.supabase.from("transactions").delete().eq("import_batch_id", batchId);
+      const rollbackAccounts = new Set<string>([
+        data.accountId,
+        ...transferTxns.map((transaction) => transaction.transfer_account_id!).filter(Boolean),
+      ]);
+      for (const accountId of rollbackAccounts) {
+        await context.supabase.rpc("recompute_account_balance", {
+          p_household_id: householdId,
+          p_account_id: accountId,
+        });
+      }
       throw new Error(
         `Import failed and was rolled back — no transactions were saved. ${e?.message ?? ""}`.trim(),
       );
@@ -1122,7 +1229,7 @@ export const bulkInsertTransactions = createServerFn({ method: "POST" })
         .update({
           status: "complete",
           imported_at: new Date().toISOString(),
-          inserted_count: data.transactions.length,
+          inserted_count: rawTxns.length + createdTransfers,
           error: null,
         })
         .eq("id", claimedUploadId);
@@ -1156,5 +1263,11 @@ export const bulkInsertTransactions = createServerFn({ method: "POST" })
         .update({ current_balance: balance })
         .eq("id", data.accountId);
     }
-    return { ok: true, inserted: data.transactions.length, alreadyImported: false, batchId };
+    return {
+      ok: true,
+      inserted: rawTxns.length + createdTransfers,
+      reconciledTransfers,
+      alreadyImported: false,
+      batchId,
+    };
   });

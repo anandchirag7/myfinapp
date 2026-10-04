@@ -16,6 +16,7 @@ import {
   Layers,
   Zap,
   RotateCcw,
+  Plus,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -59,6 +60,8 @@ import { buildCategoryIndex, categorizeByKeywords } from "@/lib/category-resolve
 import { MatchSourceBadge, StatusBadge, ConfidenceMeter } from "./badges";
 import { cn } from "@/lib/utils";
 import { CategorySelectPopover, type CategoryItem } from "@/components/category-select-popover";
+import { AccountFormDialog } from "@/components/account-form-dialog";
+import { transactionTypeForExternalDecision } from "@/lib/statement-transfers";
 
 type Category = { id: string; name: string; kind?: string; parent_id?: string | null };
 
@@ -337,9 +340,14 @@ const ClusterCard = memo(function ClusterCard({
   onSaveToBackend?: (cluster: Cluster) => void;
   onCategoryCreated?: (c: CategoryItem) => void;
 }) {
+  const [addingAccount, setAddingAccount] = useState(false);
   const count = clusterTxnCount(cluster);
   const total = clusterTotal(cluster);
   const ignored = cluster.status === "ignored";
+  const statementDirection =
+    cluster.members[0]?.sample.fingerprint?.direction ??
+    (cluster.type === "income" ? "credit" : "debit");
+  const counterpartyLabel = statementDirection === "debit" ? "To account" : "From account";
 
   return (
     <div
@@ -448,10 +456,19 @@ const ClusterCard = memo(function ClusterCard({
               </Select>
             </div>
             {cluster.type === "transfer" && (
-              <div className="w-[170px]">
+              <div className="flex min-w-[250px] items-center gap-1" title={counterpartyLabel}>
+                <span className="shrink-0 text-[10px] text-muted-foreground">
+                  {counterpartyLabel}
+                </span>
                 <Select
                   value={cluster.transfer_account_id ?? ""}
-                  onValueChange={(v) => onPatch({ transfer_account_id: v || null })}
+                  onValueChange={(v) => {
+                    if (v === "__add_account__") {
+                      setAddingAccount(true);
+                      return;
+                    }
+                    onPatch({ transfer_account_id: v || null, status: "approved" });
+                  }}
                 >
                   <SelectTrigger className="h-7 text-xs" aria-label="Transfer counterparty account">
                     <SelectValue placeholder="Counterparty account…" />
@@ -464,9 +481,31 @@ const ClusterCard = memo(function ClusterCard({
                           {a.name}
                         </SelectItem>
                       ))}
+                    <SelectItem value="__add_account__">
+                      <span className="flex items-center gap-1">
+                        <Plus className="h-3 w-3" /> Add new account
+                      </span>
+                    </SelectItem>
                   </SelectContent>
                 </Select>
               </div>
+            )}
+            {cluster.type === "transfer" && (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 px-2 text-xs"
+                onClick={() =>
+                  onPatch({
+                    type: transactionTypeForExternalDecision(statementDirection),
+                    isTransfer: false,
+                    transfer_account_id: null,
+                    status: "approved",
+                  })
+                }
+              >
+                External payment
+              </Button>
             )}
             <div className="flex flex-wrap items-center gap-1">
               {cluster.status === "approved" ? (
@@ -550,6 +589,13 @@ const ClusterCard = memo(function ClusterCard({
           )}
         </div>
       </div>
+      <AccountFormDialog
+        open={addingAccount}
+        onOpenChange={setAddingAccount}
+        onSaved={(account) => {
+          if (account?.id) onPatch({ transfer_account_id: account.id, status: "approved" });
+        }}
+      />
     </div>
   );
 });
@@ -577,7 +623,9 @@ export function ConfirmStep({
   aiRemaining: number;
   polishing: boolean;
   onPolish: () => void;
-  onCategorizeRemaining: (clusters: Cluster[]) => Promise<Record<string, string | null>>;
+  onCategorizeRemaining: (
+    clusters: Cluster[],
+  ) => Promise<Record<string, { categoryId: string; confidence: number }>>;
   onSavePayee?: (cluster: Cluster) => void;
   onCategoryCreated?: (c: CategoryItem) => void;
   onBack: () => void;
@@ -598,6 +646,25 @@ export function ConfirmStep({
   const parentRef = useRef<HTMLDivElement>(null);
 
   const stats = useMemo(() => summarize(clusters), [clusters]);
+  const invalidTransferCount = useMemo(
+    () =>
+      clusters.filter(
+        (cluster) =>
+          cluster.status !== "ignored" &&
+          cluster.type === "transfer" &&
+          (!cluster.transfer_account_id || cluster.transfer_account_id === currentAccountId),
+      ).length,
+    [clusters, currentAccountId],
+  );
+
+  const validateTransfers = useCallback(() => {
+    if (!invalidTransferCount) return true;
+    toast.error(
+      `${invalidTransferCount} internal transfer${invalidTransferCount === 1 ? "" : "s"} need another account. Select an account or mark the payment external.`,
+    );
+    setFilter("review");
+    return false;
+  }, [invalidTransferCount]);
 
   const tierSummary = useMemo(() => {
     const active = clusters.filter((cluster) => cluster.status !== "ignored");
@@ -765,14 +832,14 @@ export function ConfirmStep({
       const assignments = await onCategorizeRemaining(unresolved);
       let assigned = 0;
       const next = clusters.map((cluster) => {
-        const categoryId = assignments[cluster.id];
-        if (!categoryId) return cluster;
+        const assignment = assignments[cluster.id];
+        if (!assignment) return cluster;
         assigned++;
         return {
           ...cluster,
-          category_id: categoryId,
+          category_id: assignment.categoryId,
           source: "ai" as const,
-          confidence: Math.max(cluster.confidence, 0.75),
+          confidence: assignment.confidence,
           status: "suggested" as const,
         };
       });
@@ -807,6 +874,7 @@ export function ConfirmStep({
   }, [categories, clusters, setClusters]);
 
   const approveAllAndContinue = useCallback(() => {
+    if (!validateTransfers()) return;
     const next = clusters.map((cluster) =>
       cluster.status === "ignored"
         ? cluster
@@ -814,7 +882,7 @@ export function ConfirmStep({
     );
     setClusters(next);
     onContinue(next);
-  }, [clusters, onContinue, setClusters]);
+  }, [clusters, onContinue, setClusters, validateTransfers]);
 
   const splitTarget = clusters.find((c) => c.id === splitId) ?? null;
   const cohesion = useMemo(
@@ -1035,6 +1103,13 @@ export function ConfirmStep({
               Use Uncategorized
             </Button>
           </div>
+        </div>
+      )}
+
+      {invalidTransferCount > 0 && (
+        <div className="rounded-[10px] border border-destructive/30 bg-destructive/5 px-2.5 py-2 text-xs text-destructive">
+          {invalidTransferCount} internal transfer{invalidTransferCount === 1 ? "" : "s"} need a
+          source or target account before import.
         </div>
       )}
 
@@ -1315,7 +1390,7 @@ export function ConfirmStep({
               ? `${stats.needsReview} cluster${stats.needsReview === 1 ? "" : "s"} still need review`
               : "All clusters resolved"}
           </span>
-          <Button size="sm" onClick={() => onContinue()}>
+          <Button size="sm" onClick={() => validateTransfers() && onContinue()}>
             Review transactions
           </Button>
           <Button size="sm" variant="secondary" onClick={approveAllAndContinue}>

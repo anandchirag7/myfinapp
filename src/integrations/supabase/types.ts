@@ -1503,6 +1503,8 @@ export type Database = {
       profiles: {
         Row: {
           app_lock_enabled: boolean;
+          ai_spending_onboarding_seen_at: string | null;
+          ai_spending_onboarding_status: string;
           auto_approve_threshold: number;
           created_at: string;
           dark_mode: boolean;
@@ -1522,6 +1524,8 @@ export type Database = {
         };
         Insert: {
           app_lock_enabled?: boolean;
+          ai_spending_onboarding_seen_at?: string | null;
+          ai_spending_onboarding_status?: string;
           auto_approve_threshold?: number;
           created_at?: string;
           dark_mode?: boolean;
@@ -1541,6 +1545,8 @@ export type Database = {
         };
         Update: {
           app_lock_enabled?: boolean;
+          ai_spending_onboarding_seen_at?: string | null;
+          ai_spending_onboarding_status?: string;
           auto_approve_threshold?: number;
           created_at?: string;
           dark_mode?: boolean;
@@ -1567,6 +1573,119 @@ export type Database = {
             referencedColumns: ["id"];
           },
         ];
+      };
+      household_ai_spending_profiles: {
+        Row: {
+          household_id: string;
+          schema_version: number;
+          profile: Json;
+          updated_by: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          household_id: string;
+          schema_version?: number;
+          profile?: Json;
+          updated_by?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          household_id?: string;
+          schema_version?: number;
+          profile?: Json;
+          updated_by?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "household_ai_spending_profiles_household_id_fkey";
+            columns: ["household_id"];
+            isOneToOne: true;
+            referencedRelation: "households";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      household_transfer_memory: {
+        Row: {
+          id: string;
+          household_id: string;
+          statement_account_id: string;
+          counterparty_account_id: string;
+          normalized_pattern: string;
+          direction: string;
+          confirmation_count: number;
+          confirmed_by: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          household_id: string;
+          statement_account_id: string;
+          counterparty_account_id: string;
+          normalized_pattern: string;
+          direction: string;
+          confirmation_count?: number;
+          confirmed_by?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          household_id?: string;
+          statement_account_id?: string;
+          counterparty_account_id?: string;
+          normalized_pattern?: string;
+          direction?: string;
+          confirmation_count?: number;
+          confirmed_by?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      transaction_statement_evidence: {
+        Row: {
+          id: string;
+          household_id: string;
+          transaction_id: string;
+          statement_upload_id: string | null;
+          import_batch_id: string | null;
+          statement_account_id: string;
+          direction: string;
+          row_fingerprint: string;
+          created_by: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          household_id: string;
+          transaction_id: string;
+          statement_upload_id?: string | null;
+          import_batch_id?: string | null;
+          statement_account_id: string;
+          direction: string;
+          row_fingerprint: string;
+          created_by?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          household_id?: string;
+          transaction_id?: string;
+          statement_upload_id?: string | null;
+          import_batch_id?: string | null;
+          statement_account_id?: string;
+          direction?: string;
+          row_fingerprint?: string;
+          created_by?: string | null;
+          created_at?: string;
+        };
+        Relationships: [];
       };
       recurring_templates: {
         Row: {
@@ -2277,6 +2396,10 @@ export type Database = {
       [_ in never]: never;
     };
     Functions: {
+      recompute_account_balance: {
+        Args: { p_account_id: string; p_household_id: string };
+        Returns: number;
+      };
       has_household_access: {
         Args: { _household_id: string };
         Returns: boolean;
@@ -2291,6 +2414,28 @@ export type Database = {
       seed_default_categories: {
         Args: { _household_id: string };
         Returns: undefined;
+      };
+      resolve_statement_internal_transfer: {
+        Args: {
+          p_household_id: string;
+          p_user_id: string;
+          p_statement_account_id: string;
+          p_counterparty_account_id: string;
+          p_direction: string;
+          p_amount: number;
+          p_txn_date: string;
+          p_merchant: string;
+          p_note: string;
+          p_normalized_pattern: string;
+          p_row_fingerprint: string;
+          p_statement_upload_id?: string | null;
+          p_import_batch_id?: string | null;
+        };
+        Returns: {
+          transaction_id: string;
+          created: boolean;
+          reconciled: boolean;
+        }[];
       };
     };
     Enums: {

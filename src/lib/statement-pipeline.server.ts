@@ -27,11 +27,18 @@ import {
 } from "./statement-fingerprint";
 
 import { getHouseholdId as getHhId } from "@/lib/household.server";
+import {
+  applyAiSpendingProfileMappings,
+  buildAiSpendingProfileContext,
+  collectAiSpendingIdentityTokens,
+  normalizeAiSpendingProfile,
+} from "./ai-spending-profile";
 
 export type PipelineTxn = ExtractedTxn & {
   pattern: string;
   fingerprint: NarrationFingerprint;
   reversal_group_id?: string;
+  transfer_account_id?: string | null;
 };
 type ParsedStatement = { transactions: ExtractedTxn[]; controls: LedgerControlTotals | null };
 
@@ -98,7 +105,7 @@ async function parseFile(
 
   if (isPdf) {
     const { createOllamaClient } = await import("./ollama.server");
-    await createOllamaClient().preflight();
+    await createOllamaClient().checkAvailability();
     const { data: cats } = await supabase
       .from("categories")
       .select("name")
@@ -218,14 +225,23 @@ export async function runStatementUpload(opts: {
       .update({ status: "deduplicating", total_transactions: extracted.length })
       .eq("id", uploadId);
 
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("display_name")
-      .eq("id", userId)
-      .maybeSingle();
-    const accountHolderTokens = String(profile?.display_name ?? "")
-      .split(/\s+/)
-      .filter((token) => token.length > 2);
+    const [{ data: profile }, { data: spendingProfileRow }] = await Promise.all([
+      supabase.from("profiles").select("display_name").eq("id", userId).maybeSingle(),
+      supabase
+        .from("household_ai_spending_profiles")
+        .select("profile")
+        .eq("household_id", householdId)
+        .maybeSingle(),
+    ]);
+    const spendingProfile = normalizeAiSpendingProfile(spendingProfileRow?.profile);
+    const accountHolderTokens = Array.from(
+      new Set([
+        ...String(profile?.display_name ?? "")
+          .split(/\s+/)
+          .filter((token) => token.length > 2),
+        ...collectAiSpendingIdentityTokens(spendingProfile),
+      ]),
+    );
 
     // Normalize + dedupe
     const transactions: PipelineTxn[] = await Promise.all(
@@ -270,7 +286,7 @@ export async function runStatementUpload(opts: {
     const patterns = Array.from(groups.keys());
 
     // Fetch categories + payees BEFORE resolve (need CategoryIndex for enrichment)
-    const [{ data: cats }, { data: payeeRows }] = await Promise.all([
+    const [{ data: cats }, { data: payeeRows }, { data: transferMemory }] = await Promise.all([
       supabase
         .from("categories")
         .select("id, name, kind, parent_id")
@@ -279,6 +295,12 @@ export async function runStatementUpload(opts: {
         .from("memorized_payees")
         .select("id, merchant, category_id, aliases")
         .eq("household_id", householdId),
+      supabase
+        .from("household_transfer_memory")
+        .select("normalized_pattern,direction,counterparty_account_id")
+        .eq("household_id", householdId)
+        .eq("statement_account_id", input.accountId)
+        .in("normalized_pattern", patterns),
     ]);
     const categories = (cats ?? []) as Array<{
       id: string;
@@ -287,14 +309,48 @@ export async function runStatementUpload(opts: {
       parent_id: string | null;
     }>;
     const userCategoryNames = categories.map((c) => c.name);
+    const categoryIndex = buildCategoryIndex(categories);
+    const rememberedTransferAccount = new Map<string, string>(
+      (transferMemory ?? []).map((row: any) => [
+        `${row.normalized_pattern}\u0000${row.direction}`,
+        String(row.counterparty_account_id),
+      ]),
+    );
+    for (const transaction of transactions) {
+      const remembered = rememberedTransferAccount.get(
+        `${transaction.pattern}\u0000${transaction.fingerprint.direction}`,
+      );
+      if (remembered) {
+        transaction.type = "transfer";
+        transaction.transfer_account_id = remembered;
+      }
+    }
+    const profileResolved = applyAiSpendingProfileMappings(
+      transactions,
+      spendingProfile,
+      categoryIndex,
+    );
+    const profileMatchedPatterns = new Set(Object.keys(profileResolved));
 
     // Household rules run immediately after normalization and before every
     // learned lookup or AI classifier. A deterministic match always wins.
-    const { applyStatementRules, loadLlmRuleContext } = await import('./rules-engine.server');
+    const { applyStatementRules, loadLlmRuleContext } = await import("./rules-engine.server");
     const categoryNamesById = new Map(categories.map((c) => [c.id, c.name]));
-    const deterministic = await applyStatementRules(supabase, householdId, transactions, categoryNamesById);
-    const llmRuleContext = await loadLlmRuleContext(supabase, householdId);
-    const lookupPatterns = patterns.filter((pattern) => !deterministic.matchedPatterns.has(pattern));
+    const deterministic = await applyStatementRules(
+      supabase,
+      householdId,
+      transactions,
+      categoryNamesById,
+    );
+    const profileContext = buildAiSpendingProfileContext(spendingProfile, categoryNamesById, 2_000);
+    const llmRuleContext = [
+      ...profileContext,
+      ...(await loadLlmRuleContext(supabase, householdId)),
+    ];
+    const lookupPatterns = patterns.filter(
+      (pattern) =>
+        !profileMatchedPatterns.has(pattern) && !deterministic.matchedPatterns.has(pattern),
+    );
 
     // Resolve with pattern-level category lookups
     const lookupResult = await resolveFromLookups(
@@ -303,22 +359,29 @@ export async function runStatementUpload(opts: {
       lookupPatterns,
       householdId,
       rollout.resolver.active,
+      categoryIndex,
     );
-    const resolved = { ...deterministic.resolved, ...lookupResult.resolved };
+    const resolved = { ...profileResolved, ...deterministic.resolved, ...lookupResult.resolved };
     const unresolved = lookupResult.unresolved;
-    for(const [pattern,category] of Object.entries(deterministic.categoryOverrides)){
-      if(resolved[pattern])resolved[pattern].category=category;
+    for (const [pattern, category] of Object.entries(deterministic.categoryOverrides)) {
+      if (resolved[pattern]) resolved[pattern].category = category;
     }
     let shadowCandidateResolved = Object.keys(resolved).length;
     if (rollout.resolver.shadow && !rollout.resolver.active) {
-      const shadowResult = await resolveFromLookups(supabase, userId, patterns, householdId, true);
+      const shadowResult = await resolveFromLookups(
+        supabase,
+        userId,
+        patterns,
+        householdId,
+        true,
+        categoryIndex,
+      );
       shadowCandidateResolved = Object.keys(shadowResult.resolved).length;
     }
 
     // Also fetch pattern-level category UUIDs for clusters
     const patternCatMap = await lookupPatternCategories(supabase, householdId, patterns);
     // Enrich resolved entries with pattern-level category UUIDs
-    const categoryIndex = buildCategoryIndex(categories);
     for (const [pattern, info] of patternCatMap) {
       if (resolved[pattern] && !resolved[pattern].category) {
         const catName = categoryIndex.nameById.get(info.categoryId);
@@ -384,6 +447,8 @@ export async function runStatementUpload(opts: {
         pending,
         userCategoryNames,
         llmRuleContext,
+        guardedCategoryIds: spendingProfile.neverAutoAssignCategoryIds,
+        requireP2PReview: spendingProfile.requireP2PReview,
         ruleCategoryOverrides: deterministic.categoryOverrides,
         idempotencyKey,
         resolverVersion: STATEMENT_RESOLVER_VERSION,
@@ -400,7 +465,10 @@ export async function runStatementUpload(opts: {
     } else if (needsAi) {
       try {
         const { createOllamaClient } = await import("./ollama.server");
-        await createOllamaClient().preflight();
+        // Check connectivity/model presence without a one-shot JSON canary.
+        // The classifier itself has retry, batch bisection, and deterministic
+        // fallback, so malformed model JSON must reach that recovery path.
+        await createOllamaClient().checkAvailability();
         const { classifyPendingPatterns } = await import("./statement-classify.server");
         const classified = await classifyPendingPatterns({
           // Local/synchronous imports already carry the authenticated user
@@ -412,13 +480,15 @@ export async function runStatementUpload(opts: {
           pending,
           userCategoryNames,
           llmRuleContext,
+          guardedCategoryIds: spendingProfile.neverAutoAssignCategoryIds,
+          requireP2PReview: spendingProfile.requireP2PReview,
           householdId,
           categoryIndex,
           webEnrichmentEnabled: rollout.web.active,
         });
         Object.assign(resolved, classified.resolved);
-        for(const [pattern,category] of Object.entries(deterministic.categoryOverrides)){
-          if(resolved[pattern])resolved[pattern].category=category;
+        for (const [pattern, category] of Object.entries(deterministic.categoryOverrides)) {
+          if (resolved[pattern]) resolved[pattern].category = category;
         }
         const failedSet = new Set(classified.diagnostics.failedPatterns);
         remainingPending = pending.filter((item) => failedSet.has(item.pattern));

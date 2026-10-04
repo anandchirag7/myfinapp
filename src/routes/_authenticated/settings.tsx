@@ -36,6 +36,7 @@ import { useTheme } from "@/components/theme-provider";
 import { FactoryResetDialog } from "@/components/data-reset-dialog";
 import { StatementArchiveCard } from "@/components/statement-archive-card";
 import { cn } from "@/lib/utils";
+import { AiSpendingProfileSettingsCard } from "@/components/ai-spending-profile";
 
 import { getMyProfile, updateMyProfile } from "@/lib/profile.functions";
 import {
@@ -386,6 +387,7 @@ function SettingsPage() {
         {/* 2. Statement & AI Tab - 2 Column Grid on Desktop */}
         <TabsContent value="imports" className="space-y-6">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 w-full">
+            <AiSpendingProfileSettingsCard />
             {/* Categorization Confidence Threshold */}
             <Card className="flex flex-col justify-between">
               <div>

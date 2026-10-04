@@ -14,7 +14,13 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { ACCOUNT_TYPES, ACCOUNT_TYPE_BY_CATEGORY, type AccountCategory } from "@/lib/account-types";
 import { upsertAccount } from "@/lib/finance.functions";
@@ -23,19 +29,27 @@ export function AccountFormDialog({
   open,
   onOpenChange,
   initial,
+  onSaved,
 }: {
   open: boolean;
   onOpenChange: (o: boolean) => void;
   initial?: any;
+  onSaved?: (account: { id: string }) => void;
 }) {
   const isEdit = !!initial?.id;
-  const [category, setCategory] = useState<AccountCategory>((initial?.category as AccountCategory) ?? "bank");
+  const [category, setCategory] = useState<AccountCategory>(
+    (initial?.category as AccountCategory) ?? "bank",
+  );
   const [name, setName] = useState(initial?.name ?? "");
   const [institution, setInstitution] = useState(initial?.institution ?? "");
   const [subtype, setSubtype] = useState<string>(initial?.subtype ?? "");
   const [currency, setCurrency] = useState(initial?.currency ?? "INR");
-  const [openingBalance, setOpeningBalance] = useState<string>(String(initial?.opening_balance ?? 0));
-  const [currentBalance, setCurrentBalance] = useState<string>(String(initial?.current_balance ?? 0));
+  const [openingBalance, setOpeningBalance] = useState<string>(
+    String(initial?.opening_balance ?? 0),
+  );
+  const [currentBalance, setCurrentBalance] = useState<string>(
+    String(initial?.current_balance ?? 0),
+  );
   const [last4, setLast4] = useState(initial?.account_number_last4 ?? "");
   const [notes, setNotes] = useState(initial?.notes ?? "");
   const [details, setDetails] = useState<Record<string, any>>(initial?.details ?? {});
@@ -60,9 +74,10 @@ export function AccountFormDialog({
 
   const mut = useMutation({
     mutationFn: (data: any) => save({ data }),
-    onSuccess: () => {
+    onSuccess: (account) => {
       toast.success(isEdit ? "Account updated" : "Account added");
       qc.invalidateQueries();
+      onSaved?.(account);
       onOpenChange(false);
     },
     onError: (e: any) => toast.error(e?.message ?? "Failed"),
@@ -93,7 +108,12 @@ export function AccountFormDialog({
       <Input
         type={type}
         value={details[key] ?? ""}
-        onChange={(e) => setDetails({ ...details, [key]: type === "number" ? Number(e.target.value) : e.target.value })}
+        onChange={(e) =>
+          setDetails({
+            ...details,
+            [key]: type === "number" ? Number(e.target.value) : e.target.value,
+          })
+        }
       />
     </div>
   );
@@ -109,11 +129,21 @@ export function AccountFormDialog({
           <div className="grid grid-cols-2 gap-2">
             <div>
               <Label>Type</Label>
-              <Select value={category} onValueChange={(v) => { setCategory(v as AccountCategory); setSubtype(""); }}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+              <Select
+                value={category}
+                onValueChange={(v) => {
+                  setCategory(v as AccountCategory);
+                  setSubtype("");
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
                 <SelectContent className="max-h-72">
                   {ACCOUNT_TYPES.map((t) => (
-                    <SelectItem key={t.category} value={t.category}>{t.label}</SelectItem>
+                    <SelectItem key={t.category} value={t.category}>
+                      {t.label}
+                    </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -122,10 +152,14 @@ export function AccountFormDialog({
               <div>
                 <Label>Sub-type</Label>
                 <Select value={subtype} onValueChange={setSubtype}>
-                  <SelectTrigger><SelectValue placeholder="Choose" /></SelectTrigger>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Choose" />
+                  </SelectTrigger>
                   <SelectContent>
                     {def.subtypes.map((s) => (
-                      <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
+                      <SelectItem key={s.value} value={s.value}>
+                        {s.label}
+                      </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
@@ -135,21 +169,37 @@ export function AccountFormDialog({
 
           <div>
             <Label>Name</Label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. HDFC Savings" />
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. HDFC Savings"
+            />
           </div>
           <div>
             <Label>Institution</Label>
-            <Input value={institution} onChange={(e) => setInstitution(e.target.value)} placeholder="e.g. HDFC Bank" />
+            <Input
+              value={institution}
+              onChange={(e) => setInstitution(e.target.value)}
+              placeholder="e.g. HDFC Bank"
+            />
           </div>
 
           <div className="grid grid-cols-2 gap-2">
             <div>
               <Label>Opening balance</Label>
-              <Input type="number" value={openingBalance} onChange={(e) => setOpeningBalance(e.target.value)} />
+              <Input
+                type="number"
+                value={openingBalance}
+                onChange={(e) => setOpeningBalance(e.target.value)}
+              />
             </div>
             <div>
               <Label>Current balance</Label>
-              <Input type="number" value={currentBalance} onChange={(e) => setCurrentBalance(e.target.value)} />
+              <Input
+                type="number"
+                value={currentBalance}
+                onChange={(e) => setCurrentBalance(e.target.value)}
+              />
             </div>
           </div>
 
@@ -157,17 +207,25 @@ export function AccountFormDialog({
             <div>
               <Label>Currency</Label>
               <Select value={currency} onValueChange={setCurrency}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
                 <SelectContent>
                   {["INR", "USD", "EUR", "GBP", "AED", "SGD"].map((c) => (
-                    <SelectItem key={c} value={c}>{c}</SelectItem>
+                    <SelectItem key={c} value={c}>
+                      {c}
+                    </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
             <div>
               <Label>Last 4 digits (optional)</Label>
-              <Input maxLength={4} value={last4} onChange={(e) => setLast4(e.target.value.replace(/\D/g, ""))} />
+              <Input
+                maxLength={4}
+                value={last4}
+                onChange={(e) => setLast4(e.target.value.replace(/\D/g, ""))}
+              />
             </div>
           </div>
 
@@ -183,7 +241,8 @@ export function AccountFormDialog({
             <div className="grid grid-cols-3 gap-2">
               {detailField("interest_rate", "Rate %", "number")}
               {detailField("maturity_date", "Maturity", "date")}
-              {category === "recurring_deposit" && detailField("monthly_installment", "Monthly ₹", "number")}
+              {category === "recurring_deposit" &&
+                detailField("monthly_installment", "Monthly ₹", "number")}
             </div>
           )}
           {category === "loan" && (
@@ -233,8 +292,12 @@ export function AccountFormDialog({
           )}
         </div>
         <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button onClick={submit} disabled={mut.isPending}>{mut.isPending ? "Saving…" : "Save"}</Button>
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button onClick={submit} disabled={mut.isPending}>
+            {mut.isPending ? "Saving…" : "Save"}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

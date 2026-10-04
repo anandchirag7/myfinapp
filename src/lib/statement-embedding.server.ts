@@ -1,5 +1,12 @@
 import { createOllamaClient } from "./ollama.server";
 import { normalizePattern } from "./statement-normalize";
+import type { CategoryIndex } from "./category-resolver";
+import {
+  resolveCategoryKey,
+  isCategoryKindCompatible,
+  STATEMENT_CATEGORY_KEYS,
+  type StatementCategoryKey,
+} from "./statement-category-keys";
 
 export type VerifiedEntityMatch = {
   pattern: string;
@@ -21,6 +28,24 @@ const meaningfulTokens = (value: string) =>
 export function hasTokenCorroboration(pattern: string, alias: string): boolean {
   const left = meaningfulTokens(pattern);
   return [...meaningfulTokens(alias)].some((token) => left.has(token));
+}
+
+export function resolveVerifiedEntityCategory(
+  match: { categoryId: string | null; categoryKey: string | null },
+  index: CategoryIndex,
+  transactionType?: string,
+): { id: string; name: string } | null {
+  const categoryKey = STATEMENT_CATEGORY_KEYS.includes(match.categoryKey as StatementCategoryKey)
+    ? (match.categoryKey as StatementCategoryKey)
+    : null;
+  if (match.categoryId) {
+    const name = index.nameById.get(match.categoryId);
+    const kind = name ? index.kindByName.get(name.toLowerCase()) : undefined;
+    if (name && (!categoryKey || isCategoryKindCompatible(categoryKey, transactionType, kind))) {
+      return { id: match.categoryId, name };
+    }
+  }
+  return resolveCategoryKey(categoryKey, index, transactionType);
 }
 
 /** Retrieve verified household/global entities. Similarity alone is never authoritative. */

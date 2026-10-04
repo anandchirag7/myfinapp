@@ -49,12 +49,15 @@ const CATEGORY_HINTS: Record<StatementCategoryKey, readonly string[]> = {
 export function resolveCategoryKey(
   key: StatementCategoryKey | null | undefined,
   index: CategoryIndex,
+  transactionType?: string,
 ): { id: string; name: string } | null {
   if (!key) return null;
   const hints = CATEGORY_HINTS[key];
   let best: { id: string; name: string; score: number } | null = null;
   for (const [id, name] of index.nameById) {
     const normalized = name.toLowerCase();
+    const kind = index.kindByName.get(normalized);
+    if (!isCategoryKindCompatible(key, transactionType, kind)) continue;
     const score = Math.max(
       ...hints.map((hint) =>
         normalized === hint ? 3 : normalized.includes(hint) || hint.includes(normalized) ? 2 : 0,
@@ -63,4 +66,19 @@ export function resolveCategoryKey(
     if (score && (!best || score > best.score)) best = { id, name, score };
   }
   return best ? { id: best.id, name: best.name } : null;
+}
+
+export function isCategoryKindCompatible(
+  key: StatementCategoryKey,
+  transactionType: string | undefined,
+  categoryKind: string | undefined,
+): boolean {
+  if (!categoryKind || !transactionType) return true;
+  if (key === "transfer" || transactionType === "transfer") return categoryKind === "transfer";
+  if (key === "investments") return categoryKind === "investment";
+  if (key === "salary_income" || key === "refund_reversal") return categoryKind === "income";
+  if (transactionType === "income") return categoryKind === "income";
+  if (transactionType === "expense")
+    return categoryKind !== "income" && categoryKind !== "transfer";
+  return true;
 }

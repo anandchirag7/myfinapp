@@ -7,6 +7,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { useTheme } from "@/components/theme-provider";
 import { Button } from "@/components/ui/button";
+import { AiSpendingProfileOnboarding } from "@/components/ai-spending-profile";
 import { Moon, Sun, LogOut } from "lucide-react";
 
 export const Route = createFileRoute("/_authenticated")({
@@ -16,7 +17,11 @@ export const Route = createFileRoute("/_authenticated")({
       if (error || !data.user) throw redirect({ to: "/auth" });
       return { user: data.user };
     } catch (err: any) {
-      if (err && typeof err === "object" && ("isRedirect" in err || "to" in err || "statusCode" in err)) {
+      if (
+        err &&
+        typeof err === "object" &&
+        ("isRedirect" in err || "to" in err || "statusCode" in err)
+      ) {
         throw err;
       }
       throw redirect({ to: "/auth" });
@@ -64,6 +69,7 @@ function AuthedLayout() {
           </main>
         </div>
         <FastEntryDialog />
+        <AiSpendingProfileOnboarding />
         <Toaster />
       </div>
     </SidebarProvider>

@@ -428,4 +428,18 @@ export const getDashboard = createServerFn({ method: "GET" })
     };
   });
 
+export const listGoals = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    const householdId = await getHouseholdId(context);
+    const { data, error } = await (context.supabase as any)
+      .from("goals")
+      .select("*")
+      .eq("household_id", householdId)
+      .order("created_at", { ascending: true });
+    if (error) return [];
+    return data ?? [];
+  });
+
+
 

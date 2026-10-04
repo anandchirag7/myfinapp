@@ -56,7 +56,7 @@ export const Route = createFileRoute("/api/public/hooks/statement-classify")({
 
         try {
           const { createOllamaClient } = await import("@/lib/ollama.server");
-          await createOllamaClient().preflight();
+          await createOllamaClient().checkAvailability();
           const { classifyPendingPatterns } = await import("@/lib/statement-classify.server");
 
           // Build CategoryIndex for pattern persistence (if householdId provided)

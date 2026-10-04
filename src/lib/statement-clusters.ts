@@ -224,7 +224,17 @@ export function groupPatterns(
 
 // --------------------------------------------------------------- cluster build
 
-export type ResolvedEntry = { payee: string; category: string | null; source: string };
+export type ResolvedEntry = {
+  payee: string;
+  category: string | null;
+  categoryId?: string | null;
+  source: string;
+  confidence?: number | null;
+  identityConfidence?: number | null;
+  categoryConfidence?: number | null;
+  requiresReview?: boolean;
+  blockingReason?: "identity_unknown" | "category_unknown" | "low_confidence" | null;
+};
 
 function sourceOf(raw: string | undefined): MatchSource {
   switch (raw) {
@@ -234,12 +244,19 @@ function sourceOf(raw: string | undefined): MatchSource {
     case "payee":
       return "payee";
     case "rule":
+    case "user_rule":
+    case "user_profile":
     case "keyword":
       return "rule";
     case "ai":
     case "ai_inferred":
       return "ai";
     case "user_confirmed":
+    case "memorized_payee":
+      return "payee";
+    case "household_pattern":
+    case "global_dictionary":
+    case "verified_embedding":
     case "dictionary":
     case "seed":
       return "dictionary";
@@ -369,6 +386,9 @@ export function buildClusters(opts: {
   }
 
   return groups.map((group, gi) => {
+    const groupTransactions = transactions.filter((transaction) =>
+      group.includes(transaction.pattern),
+    );
     const members = group.flatMap((p) => Array.from(byPattern.get(p)?.values() ?? []));
     const votes = group.reduce(
       (acc, p) => {
@@ -408,7 +428,11 @@ export function buildClusters(opts: {
     // A learned user override recognizes the identity, but it is not evidence
     // that a memorized_payees row exists. Only an actual existing-payee lookup
     // may set isExisting and suppress persistence during final import.
-    const isUserHit = hit?.source === "user" || hit?.source === "alias" || hit?.source === "payee";
+    const isUserHit =
+      hit?.source === "user" ||
+      hit?.source === "user_confirmed" ||
+      hit?.source === "alias" ||
+      hit?.source === "payee";
     const hasExisting = Boolean(existing);
 
     let name: string;
@@ -430,19 +454,27 @@ export function buildClusters(opts: {
       source = group.length > 1 ? "cluster" : "pending";
     }
 
-    const confidence = isExisting ? 1 : CONFIDENCE[source];
-    const status = isExisting ? "auto" : statusFor(source, confidence);
+    const confidence = isExisting
+      ? 1
+      : Math.min(1, Math.max(0, hit?.categoryConfidence ?? hit?.confidence ?? CONFIDENCE[source]));
+    const status = isExisting
+      ? "auto"
+      : hit?.requiresReview
+        ? hit.categoryId || hit.category
+          ? "suggested"
+          : "review"
+        : statusFor(source, confidence);
 
-    let category_id = existing?.category_id ?? null;
+    let category_id = existing?.category_id ?? hit?.categoryId ?? null;
     let resolutionReason: Cluster["resolutionReason"] = existing?.category_id
       ? "saved_payee"
       : isUserHit
         ? "user_override"
-        : hit?.source === "dictionary"
+        : hit?.source === "dictionary" || hit?.source === "global_dictionary"
           ? "dictionary"
           : hit?.source === "ai"
             ? "ai"
-            : hit?.source === "keyword"
+            : hit?.source === "keyword" || hit?.source === "user_rule"
               ? "keyword"
               : "unresolved";
     let categoryResolutionError: string | null = null;
@@ -488,14 +520,31 @@ export function buildClusters(opts: {
       }
     }
 
-    // A resolved transfer category is stronger than the debit/credit-only
-    // type inferred by spreadsheet parsing.
+    // A transfer category is not enough to prove ownership. Payment rails such
+    // as NEFT/IMPS/UPI to an external party must remain expenses or income.
     if (category_id && categoryIndex) {
       const categoryName = categoryIndex.nameById.get(category_id)?.toLowerCase();
-      if (categoryName && categoryIndex.kindByName.get(categoryName) === "transfer") {
+      const hasOwnershipEvidence = groupTransactions.some(
+        (transaction) =>
+          transaction.fingerprint?.counterpartyKind === "self" ||
+          Boolean(transaction.transfer_account_id),
+      );
+      if (
+        categoryName &&
+        categoryIndex.kindByName.get(categoryName) === "transfer" &&
+        hasOwnershipEvidence
+      ) {
         type = "transfer";
       }
     }
+
+    const transferAccounts = Array.from(
+      new Set(
+        groupTransactions.map((transaction) => transaction.transfer_account_id).filter(Boolean),
+      ),
+    );
+    const transfer_account_id =
+      transferAccounts.length === 1 ? (transferAccounts[0] as string) : null;
 
     return {
       id: `c${gi}`,
@@ -513,7 +562,8 @@ export function buildClusters(opts: {
       isExisting,
       existingPayeeId: existing?.id ?? null,
       isTransfer: type === "transfer",
-      pendingAi: !hit && !isExisting,
+      transfer_account_id,
+      pendingAi: (!hit && !isExisting) || Boolean(hit?.blockingReason),
       resolutionReason,
       categoryResolutionError,
     } satisfies Cluster;

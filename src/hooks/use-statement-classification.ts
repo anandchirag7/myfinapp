@@ -14,7 +14,20 @@ export type ClassificationProgress = {
     | "failed"
     | "cancelled"
     | null;
-  resolved: Record<string, { payee: string; category: string | null; source: string }>;
+  resolved: Record<
+    string,
+    {
+      payee: string;
+      category: string | null;
+      categoryId?: string | null;
+      source: string;
+      confidence?: number | null;
+      identityConfidence?: number | null;
+      categoryConfidence?: number | null;
+      requiresReview?: boolean;
+      blockingReason?: "identity_unknown" | "category_unknown" | "low_confidence" | null;
+    }
+  >;
   processed: number;
   total: number;
   error: string | null;

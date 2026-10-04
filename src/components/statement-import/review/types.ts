@@ -15,6 +15,7 @@ export type ReviewRow = {
   include: boolean;
   duplicate: boolean;
   transfer_account_id?: string | null;
+  statement_direction?: "debit" | "credit";
   /** Why this row was flagged as a duplicate (match keys + confidence). */
   dup?: DuplicateEvidence;
 };
@@ -27,7 +28,6 @@ export type DuplicateEvidence = {
   reason: string;
   existing?: { date: string; amount: number; merchant: string | null; note: string | null };
 };
-
 
 export type Category = { id: string; name: string; parent_id: string | null };
 

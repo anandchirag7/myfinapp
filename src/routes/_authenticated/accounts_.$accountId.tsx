@@ -185,12 +185,21 @@ function AccountRegisterPage() {
     const map = new Map<string, number>();
     for (const t of chrono) {
       const amt = Number(t.amount);
-      const sign = t.type === "income" ? 1 : t.type === "expense" ? -1 : 0;
+      const sign =
+        t.type === "income"
+          ? 1
+          : t.type === "expense"
+            ? -1
+            : t.account_id === accountId
+              ? -1
+              : t.transfer_account_id === accountId
+                ? 1
+                : 0;
       bal += sign * amt;
       map.set(t.id, bal);
     }
     return sorted.map((t) => ({ ...t, running: map.get(t.id) ?? 0 }));
-  }, [sorted, opening]);
+  }, [sorted, opening, accountId]);
 
   // ---- EMI Hierarchy dynamic linking (for both DB split_parent_id and runtime fallback)
   const withEmiHierarchy = useMemo(() => {
@@ -713,6 +722,7 @@ function AccountRegisterPage() {
                         onReview={() => patchM.mutate({ id: t.id, patch: { is_reviewed: !t.is_reviewed } })}
                         onSplit={() => { setSplitTxnTarget(t); setSplitDialogOpen(true); }}
                         currency={currency}
+                        viewedAccountId={accountId!}
                       />
                     ))}
                 </tbody>
@@ -832,15 +842,23 @@ function Sparkline({ values, tone }: { values: number[]; tone: string }) {
 }
 
 /* ============================== register row ============================== */
-function RegisterRow({ t, density, selected, onSelect, onOpen, onEdit, onFlag, onReview, onSplit, currency, allTxns = [] }: {
+function RegisterRow({ t, density, selected, onSelect, onOpen, onEdit, onFlag, onReview, onSplit, currency, viewedAccountId, allTxns = [] }: {
   t: Txn & { running: number; split_parent_id?: string | null }; density: "compact" | "comfortable" | "spacious";
   selected: boolean; onSelect: (v: boolean) => void; onOpen: () => void; onEdit: () => void;
   onFlag: () => void; onReview: () => void; onSplit?: () => void; currency: string;
+  viewedAccountId: string;
   allTxns?: (Txn & { running: number; split_parent_id?: string | null })[];
 }) {
   const [expanded, setExpanded] = useState(false);
   const pad = density === "compact" ? "py-1.5" : density === "spacious" ? "py-4" : "py-2.5";
   const amt = Number(t.amount);
+  const transferOutgoing = t.type === "transfer" && t.account_id === viewedAccountId;
+  const transferIncoming = t.type === "transfer" && t.transfer_account_id === viewedAccountId;
+  const displayMerchant = transferOutgoing
+    ? `Transfer to ${t.transfer_account?.name ?? "account"}`
+    : transferIncoming
+      ? `Transfer from ${t.account?.name ?? "account"}`
+      : (t.merchant ?? t.memo ?? "(untitled)");
   const isPending = t.cleared_status === "pending";
   const typeColor = t.type === "income" ? "text-emerald-600" : t.type === "expense" ? "text-red-600" : "text-blue-600";
 
@@ -886,7 +904,7 @@ function RegisterRow({ t, density, selected, onSelect, onOpen, onEdit, onFlag, o
             </div>
             <div className="min-w-0">
               <div className="flex items-center gap-1.5 flex-wrap">
-                <p className="truncate font-medium">{t.merchant ?? t.memo ?? "(untitled)"}</p>
+                <p className="truncate font-medium">{displayMerchant}</p>
                 {isEmiParent && (
                   <span className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.2 text-[10px] font-semibold bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300">
                     <CreditCard className="h-3 w-3" /> EMI
@@ -913,11 +931,11 @@ function RegisterRow({ t, density, selected, onSelect, onOpen, onEdit, onFlag, o
           <CategoryTypeBadge resolved={resolveCategoryType(t)} />
         </td>
         <td className={cn("px-3 text-xs text-muted-foreground", pad)}>{t.payment_method ?? "—"}</td>
-        <td className={cn("px-3 text-right tabular-nums", pad, t.type === "expense" ? typeColor : "text-muted-foreground/50")}>
-          {t.type === "expense" ? formatCurrency(amt, currency) : "—"}
+        <td className={cn("px-3 text-right tabular-nums", pad, t.type === "expense" || transferOutgoing ? typeColor : "text-muted-foreground/50")}>
+          {t.type === "expense" || transferOutgoing ? formatCurrency(amt, currency) : "—"}
         </td>
-        <td className={cn("px-3 text-right tabular-nums", pad, t.type === "income" ? typeColor : "text-muted-foreground/50")}>
-          {t.type === "income" ? formatCurrency(amt, currency) : "—"}
+        <td className={cn("px-3 text-right tabular-nums", pad, t.type === "income" || transferIncoming ? typeColor : "text-muted-foreground/50")}>
+          {t.type === "income" || transferIncoming ? formatCurrency(amt, currency) : "—"}
         </td>
         <td className={cn("px-3 text-right tabular-nums font-medium", pad)}>{formatCurrency(t.running, currency)}</td>
         <td className={cn("pr-2", pad)} onClick={(e) => e.stopPropagation()}>

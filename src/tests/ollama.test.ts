@@ -74,5 +74,25 @@ export function registerOllamaTests() {
       expect((caught as OllamaError).retryable).toBe(true);
       expect((caught as OllamaError).retryAfterMs).toBe(2000);
     });
+
+    it("checks model availability without requiring a JSON chat canary", async () => {
+      const requests: string[] = [];
+      const client = createOllamaClient({
+        baseUrl: "http://ollama.test",
+        model: "llama3.1",
+        retries: 0,
+        fetchImpl: (async (input) => {
+          const url = String(input);
+          requests.push(url);
+          if (url.endsWith("/api/version")) return jsonResponse({ version: "1.0.0" });
+          if (url.endsWith("/api/tags")) return jsonResponse({ models: [{ name: "llama3.1:latest" }] });
+          return jsonResponse({ message: { content: "not-json" } });
+        }) as typeof fetch,
+      });
+
+      const result = await client.checkAvailability();
+      expect(result.ok).toBe(true);
+      expect(requests.some((url) => url.endsWith("/api/chat"))).toBe(false);
+    });
   });
 }

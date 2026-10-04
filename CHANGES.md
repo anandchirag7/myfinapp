@@ -2,6 +2,80 @@
 
 This file tracks all modified and newly created files along with their date of change.
 
+## 2026-10-03
+
+- Fixed statement imports sending import-only `statement_direction` and `statement_row_key` fields to the `transactions` table; persistence now uses an explicit allowlist for database columns, including EMI parent and child rows.
+- Added a comprehensive remediation plan for AI transaction categorization covering the current hybrid pipeline, confidence propagation, safe household learning, deterministic rule precedence and performance, embedding resolution, prompt budgeting, manual AI abstention, tests, rollout, and rollback criteria.
+- `AI_TRANSACTION_CATEGORIZATION_REMEDIATION_PLAN.md`
+- Began the AI categorization remediation with red-first regression coverage for confidence propagation, safe learning, deterministic category-only rules, embedding categories, direction-aware stable keys, prompt budgets, and manual AI abstention.
+- `src/tests/statement-categorization-remediation.test.ts`
+- `src/tests/test-runner.ts`
+- Added shared confidence, learning, prompt-budget, and manual-abstention policy helpers plus direction-aware stable-category and verified-embedding category resolution.
+- `src/lib/statement-classification-policy.ts`
+- `src/lib/statement-category-keys.ts`
+- `src/lib/statement-embedding.server.ts`
+- Batched deterministic statement rules with one ruleset load per import, materialized category-only rule matches, and preserved resolver confidence/category IDs through cluster construction.
+- `src/lib/rules-engine.server.ts`
+- `src/lib/statement-clusters.ts`
+- Preserved stored pattern-category provenance, confidence, category IDs, and names during lookup instead of collapsing memory into a bare category name.
+- `src/lib/pattern-categories.functions.ts`
+- Wired real model confidence, guarded abstention, direction-aware stable-key resolution, accurate keyword provenance, and high-confidence-only learning into the live Ollama classifier and resolution audit rows.
+- `src/lib/statement-classify.server.ts`
+- Passed the response-local household category index into exact and embedding lookup resolution so stored category UUIDs are resolved safely.
+- `src/lib/statement-pipeline.server.ts`
+- Updated statement review clusters and realtime classification updates to consume actual category IDs, confidence, review requirements, and provenance.
+- `src/components/statement-import-dialog.tsx`
+- Extended realtime classification result typing to carry category IDs, confidence dimensions, and review/blocking metadata.
+- `src/hooks/use-statement-classification.ts`
+- Made the confirm-screen Ask AI action return structured confidence, permit explicit abstention, reject weak assignments, and preserve accepted confidence in the review UI.
+- `src/lib/statement-import.functions.ts`
+- `src/components/statement-import/confirm-step.tsx`
+- Added deterministic-rule conflict detection and tighter automatic prompt budgeting with bounded narration samples.
+- Aligned queued classification progress with synchronous mode by reporting all resolved patterns and refreshed stale classifier documentation.
+- `src/lib/statement-queue.server.ts`
+- Completed the AI transaction-categorization remediation and documented implementation status and verification results: real confidence propagation, abstention thresholds, guarded learning, safe legacy-memory reuse, batch rules, rule-conflict review, embedding category resolution, direction-aware category keys, prompt budgets, and structured manual AI.
+- Added a household-scoped AI Spending Profile with per-user first-login onboarding state, row-level security, bounded structured preferences, and editable settings.
+- `supabase/migrations/20261003000000_ai_spending_profiles.sql`
+- `src/lib/ai-spending-profile.ts`
+- `src/lib/ai-spending-profile.functions.ts`
+- `src/components/ai-spending-profile.tsx`
+- `src/integrations/supabase/types.ts`
+- `src/routes/_authenticated/route.tsx`
+- `src/routes/_authenticated/settings.tsx`
+- Integrated exact merchant, income-source, and recurring-payment profile mappings ahead of AI; added household identity normalization, sanitized prompt context, configurable P2P review, and protected-category review enforcement in synchronous and queued statement classification.
+- `src/lib/statement-pipeline.server.ts`
+- `src/lib/statement-classify.server.ts`
+- `src/lib/statement-queue.server.ts`
+- `src/lib/statement-clusters.ts`
+- Added regression coverage for profile normalization, deterministic mappings, identity tokens, prompt bounds, guarded categories, and P2P preferences.
+- `src/tests/ai-spending-profile.test.ts`
+- Implemented canonical internal statement transfers: directional source/target account confirmation, inline account creation, external-payment fallback, remembered household mappings, retry-safe statement evidence, opposite-statement reconciliation, ambiguity protection, rollback cleanup, and both-account balance updates.
+- Added account-register transfer perspective so a single canonical row appears as a withdrawal in the source account and a deposit in the destination account.
+- Added a migration with household-scoped RLS tables and an authenticated reconciliation RPC, plus focused regression tests and implementation documentation.
+- `INTERNAL_TRANSFER_IMPLEMENTATION_PLAN.md`
+- `supabase/migrations/20261003010000_internal_transfer_reconciliation.sql`
+- `src/lib/statement-transfers.ts`
+- `src/lib/statement-import.functions.ts`
+- `src/lib/statement-pipeline.server.ts`
+- `src/lib/statement-clusters.ts`
+- `src/components/statement-import/confirm-step.tsx`
+- `src/components/statement-import-dialog.tsx`
+- `src/components/statement-import/review/types.ts`
+- `src/components/account-form-dialog.tsx`
+- `src/routes/_authenticated/accounts_.$accountId.tsx`
+- `src/integrations/supabase/types.ts`
+- `src/tests/statement-transfers.test.ts`
+- `src/tests/test-runner.ts`
+
+## 2026-09-06
+
+- Prevented malformed Ollama JSON from failing statement classification during preflight by separating model availability checks from the JSON canary, allowing the existing retry, batch-splitting, and deterministic fallback pipeline to handle model output failures.
+- `src/lib/ollama.server.ts`
+- `src/lib/statement-pipeline.server.ts`
+- `src/lib/statement-import.functions.ts`
+- `src/routes/api/public/hooks/statement-classify.ts`
+- `src/tests/ollama.test.ts`
+
 ## 2026-09-04
 
 - Added a phased implementation plan for displaying explicit and direction-inferred category types on the Transactions and individual Account register pages, including split handling, sorting, saved views, details, exports, type safety, and verification.

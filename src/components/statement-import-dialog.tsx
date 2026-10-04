@@ -176,7 +176,15 @@ function ActivityBanner({ activity, onDismiss }: { activity: Activity; onDismiss
   );
 }
 
-export function StatementImportDialog() {
+export function StatementImportDialog({
+  trigger,
+  open: openProp,
+  onOpenChange,
+}: {
+  trigger?: React.ReactNode;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+} = {}) {
   const startFn = useServerFn(startStatementUpload);
   const correctionsFn = useServerFn(saveMerchantCorrections);
   const saveFn = useServerFn(bulkInsertTransactions);
@@ -192,7 +200,12 @@ export function StatementImportDialog() {
   const listAcc = useServerFn(listAccounts);
   const { data: accounts = [] } = useQuery({ queryKey: ["accounts"], queryFn: () => listAcc() });
 
-  const [open, setOpen] = useState(false);
+  const [openInternal, setOpenInternal] = useState(false);
+  const open = openProp ?? openInternal;
+  const setOpen = (v: boolean) => {
+    onOpenChange?.(v);
+    if (openProp === undefined) setOpenInternal(v);
+  };
   const [step, setStep] = useState<Step>("import");
   const [accountId, setAccountId] = useState("");
   const [bank, setBank] = useState("");
@@ -278,7 +291,9 @@ export function StatementImportDialog() {
         if (!hit) return c;
         // Use fuzzy resolver when categoryIndex is available
         let resolvedCatId = c.category_id;
-        if (!resolvedCatId && hit.category) {
+        if (!resolvedCatId && hit.categoryId) {
+          resolvedCatId = hit.categoryId;
+        } else if (!resolvedCatId && hit.category) {
           resolvedCatId = categoryIndex
             ? resolveCategoryId(hit.category, categoryIndex)
             : (categoryIdByName.get(hit.category.toLowerCase()) ?? null);
@@ -288,14 +303,20 @@ export function StatementImportDialog() {
           name: hit.payee,
           originalName: hit.payee,
           pendingAi: false,
-          source: "ai",
-          confidence: Math.max(c.confidence, 0.72),
-          status: c.status === "review" ? "suggested" : c.status,
+          source: hit.source === "keyword" || hit.source === "user_rule" ? "rule" : "ai",
+          confidence: hit.categoryConfidence ?? hit.confidence ?? c.confidence,
+          status: hit.requiresReview
+            ? resolvedCatId
+              ? "suggested"
+              : "review"
+            : c.status === "review"
+              ? "suggested"
+              : c.status,
           category_id: resolvedCatId,
         };
       }),
     );
-  }, [classification.resolved, categoryIdByName]);
+  }, [classification.resolved, categoryIdByName, categoryIndex]);
 
   const aiRemaining = clusters.filter((c) => c.pendingAi).length;
 
@@ -752,7 +773,7 @@ export function StatementImportDialog() {
 
   const onCategorizeRemaining = async (
     targets: Cluster[],
-  ): Promise<Record<string, string | null>> => {
+  ): Promise<Record<string, { categoryId: string; confidence: number }>> => {
     if (!targets.length || !categories.length) return {};
     const result: any = await categorizeClustersFn({
       data: {
@@ -764,12 +785,19 @@ export function StatementImportDialog() {
       },
     });
     const categoryIndex = buildCategoryIndex(categories);
-    const assignments: Record<string, string | null> = {};
-    for (const [rawIndex, categoryName] of Object.entries(result?.categories ?? {})) {
+    const assignments: Record<string, { categoryId: string; confidence: number }> = {};
+    for (const [rawIndex, assignment] of Object.entries(result?.assignments ?? {})) {
       const index = Number(rawIndex);
       const cluster = targets[index];
       if (!cluster) continue;
-      assignments[cluster.id] = resolveCategoryId(String(categoryName), categoryIndex);
+      const value = assignment as { category?: string; confidence?: number };
+      const categoryId = resolveCategoryId(String(value.category ?? ""), categoryIndex);
+      if (categoryId) {
+        assignments[cluster.id] = {
+          categoryId,
+          confidence: Number(value.confidence ?? 0),
+        };
+      }
     }
     return assignments;
   };
@@ -791,6 +819,8 @@ export function StatementImportDialog() {
         payee: c?.name ?? "",
         category_id: c?.category_id ?? null,
         transfer_account_id: c?.transfer_account_id ?? null,
+        statement_direction:
+          t.fingerprint?.direction ?? ((c?.type ?? t.type) === "income" ? "credit" : "debit"),
         source: c?.pendingAi ? "pending" : (c?.source ?? "cluster"),
         confidence: c?.confidence ?? 0.5,
         include: !ignored,
@@ -1032,9 +1062,7 @@ export function StatementImportDialog() {
     try {
       const active = clusters.filter((c) => c.status !== "ignored");
       const newPayees = active
-        .filter(
-          (c) => !c.isExisting && c.name.trim() && (c.saveAsPayee || c.status === "approved"),
-        )
+        .filter((c) => !c.isExisting && c.name.trim() && (c.saveAsPayee || c.status === "approved"))
         .map((c) => ({
           merchant: c.name.trim(),
           category_id: c.category_id ?? null,
@@ -1061,6 +1089,9 @@ export function StatementImportDialog() {
             merchant: r.payee || null,
             note: r.description.slice(0, 500),
             transfer_account_id: r.transfer_account_id ?? null,
+            statement_direction: r.statement_direction,
+            normalized_pattern: r.pattern.slice(0, 240),
+            statement_row_key: r.key.slice(0, 200),
           })),
         },
         signal: controller.signal,
@@ -1195,11 +1226,15 @@ export function StatementImportDialog() {
         setOpen(v);
       }}
     >
-      <DialogTrigger asChild>
-        <Button variant="outline" size="sm">
-          <Upload className="mr-2 h-4 w-4" /> Import statement
-        </Button>
-      </DialogTrigger>
+      {trigger !== null && (
+        <DialogTrigger asChild>
+          {trigger ?? (
+            <Button variant="outline" size="sm">
+              <Upload className="mr-2 h-4 w-4" /> Import statement
+            </Button>
+          )}
+        </DialogTrigger>
+      )}
       <DialogContent className="flex max-h-[92vh] w-[96vw] max-w-6xl flex-col gap-3 overflow-hidden p-4 sm:p-5">
         <DialogHeader className="space-y-2">
           <div className="flex flex-wrap items-center justify-between gap-2 pr-8">
@@ -1405,7 +1440,9 @@ export function StatementImportDialog() {
                       className="min-w-0 overflow-hidden rounded-[8px] border border-border bg-background px-2 py-1 text-[11px]"
                     >
                       <div className="grid min-w-0 grid-cols-1 gap-0.5 sm:grid-cols-[minmax(0,1fr)_auto] sm:gap-2">
-                        <span className="min-w-0 truncate font-medium">{r.payee || r.description}</span>
+                        <span className="min-w-0 truncate font-medium">
+                          {r.payee || r.description}
+                        </span>
                         <span className="min-w-0 break-words tabular-nums text-muted-foreground sm:whitespace-nowrap">
                           {r.date} · {r.amount.toFixed(2)} ·{" "}
                           {Math.round((r.dup?.confidence ?? 0) * 100)}% match
@@ -1451,7 +1488,10 @@ export function StatementImportDialog() {
             </p>
             <AlertDialogFooter className="gap-2 sm:space-x-0">
               <AlertDialogCancel className="w-full sm:w-auto">Back to review</AlertDialogCancel>
-              <AlertDialogAction className="w-full whitespace-normal sm:w-auto" onClick={commitSave}>
+              <AlertDialogAction
+                className="w-full whitespace-normal sm:w-auto"
+                onClick={commitSave}
+              >
                 Import {previewSummary.included.toLocaleString()} transactions
               </AlertDialogAction>
             </AlertDialogFooter>

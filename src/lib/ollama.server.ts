@@ -292,7 +292,7 @@ export function createOllamaClient(options: ClientOptions = {}) {
         embedModel,
       );
     },
-    async preflight() {
+    async checkAvailability() {
       const selectedModel = assertModel();
       const started = Date.now();
       const [version, tags] = await Promise.all([this.version(), this.tags()]);
@@ -305,6 +305,11 @@ export function createOllamaClient(options: ClientOptions = {}) {
           "model_unavailable",
           `Configured Ollama model '${selectedModel}' is not installed or accessible`,
         );
+      return { ok: true as const, version: version.version, model: selectedModel, latencyMs: Date.now() - started };
+    },
+    async preflight() {
+      const availability = await this.checkAvailability();
+      const started = Date.now();
       const canary = await this.chatJson(
         [{ role: "user", content: 'Return only {"ok":true}.' }],
         z.object({ ok: z.literal(true) }),
@@ -312,9 +317,9 @@ export function createOllamaClient(options: ClientOptions = {}) {
       );
       return {
         ok: canary.ok,
-        version: version.version,
-        model: selectedModel,
-        latencyMs: Date.now() - started,
+        version: availability.version,
+        model: availability.model,
+        latencyMs: availability.latencyMs + Date.now() - started,
       };
     },
   };
