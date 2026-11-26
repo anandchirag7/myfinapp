@@ -396,7 +396,9 @@ const PDF_AMOUNT_RE = /^(?:(?:INR|RS\.?|₹)\s*)?(\d{1,3}(?:,\d{2,3})*\.\d{2}|\d
 const PDF_LEADING_DATE_RE =
   /^(\d{4}-\d{1,2}-\d{1,2}|\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}|\d{1,2}[\-\s][A-Za-z]{3,}[\-\s]\d{2,4})(?:\s+(.*))?$/;
 const PDF_NOISE_LINE_RE =
-  /^(?:page\s+\d+(?:\s+of\s+\d+)?|statement\s+of\s+account|account\s+statement|generated\s+on|date\s*\|\s*narration|txn\s+date|transaction\s+date|opening\s+balance|closing\s+balance|total\b|\*\*+end\s+of\s+statement)/i;
+  /^(?:page\s+\d+(?:\s+of\s+\d+)?|statement\s+of\s+account|account\s+statement|generated\s+on|date\s*\|\s*narration|txn\s+date|transaction\s+date|opening\s+balance|closing\s+balance|dr\s+count|cr\s+count|total\s+debits?|total\s+credits?|brought\s+forward|carried\s+forward|contents\s+of\s+this\s+statement|this\s+is\s+a\s+computer\s+generated|nomination|total\b|\*\*+end\s+of\s+statement)/i;
+const PDF_SUMMARY_STOP_RE =
+  /^(?:statement\s+summary|account\s+summary|\*\*+\s*end\s+of\s+statement)/i;
 
 function parsePdfAmountCell(cell: string): { value: number; tag: "cr" | "dr" | null } | null {
   const m = cell.trim().match(PDF_AMOUNT_RE);
@@ -426,6 +428,7 @@ export function extractPdfRowsDeterministic(pages: string[]): ExtractedTxn[] {
       }
       continue;
     }
+    if (blocks.length > 0 && PDF_SUMMARY_STOP_RE.test(line)) break;
     if (PDF_NOISE_LINE_RE.test(line)) continue;
 
     const rawCells = line.split(/\s*\|\s*/).map((c) => c.trim()).filter(Boolean);
@@ -480,7 +483,10 @@ export function extractPdfRowsDeterministic(pages: string[]): ExtractedTxn[] {
     }
 
     const description = descParts.join(" ").replace(/\s+/g, " ").trim();
-    if (!description || !amounts.length) continue;
+    if (!description || !amounts.length || amounts.length > 3) continue;
+    if (/\b(?:statement\s+summary|opening\s+balance|closing\s+balance|total\s+debits?|total\s+credits?)\b/i.test(description)) {
+      continue;
+    }
 
     let amount = 0;
     let direction: "debit" | "credit" = "debit";

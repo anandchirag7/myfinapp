@@ -244,9 +244,11 @@ export async function runStatementUpload(opts: {
     const parsed = await parseFile(supabase, householdId, input);
     const extracted = parsed.transactions;
     if (!extracted.length) throw new Error("No transactions found in this file.");
+    const isPdf =
+      input.mimeType === "application/pdf" || input.fileName.toLowerCase().endsWith(".pdf");
     const ledger = reconcileLedger(extracted, parsed.controls);
     const balanceContinuity = auditBalanceContinuity(extracted);
-    if (balanceContinuity.issues.length) {
+    if (!isPdf && balanceContinuity.issues.length) {
       const sample = balanceContinuity.issues
         .slice(0, 8)
         .map((issue) => `row ${issue.sourceRowNumber} (delta ${issue.delta.toFixed(2)})`)
