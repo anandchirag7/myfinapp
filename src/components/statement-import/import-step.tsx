@@ -145,7 +145,8 @@ export function ImportStep({
   }, [detection]);
 
   return (
-    <div className="space-y-3">
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="space-y-1.5">
           <Label className="text-[11px] uppercase tracking-wide text-muted-foreground">Account</Label>
@@ -325,32 +326,48 @@ export function ImportStep({
             <Lock className="h-3.5 w-3.5 text-warning shrink-0" aria-hidden />
             <span>PDF Password Required</span>
           </div>
-          <div className="relative">
-            <Input
-              type={showPassword ? "text" : "password"}
-              value={pdfPassword}
-              onChange={(e) => setPdfPassword(e.target.value)}
-              placeholder="Enter PDF password (e.g. bank statement password)"
-              autoFocus
-              className="h-9 pr-9 bg-background"
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && ready && !parsing) {
-                  e.preventDefault();
-                  onParse();
-                }
-              }}
-            />
-            <button
+          <div className="flex items-center gap-2">
+            <div className="relative flex-1">
+              <Input
+                type={showPassword ? "text" : "password"}
+                value={pdfPassword}
+                onChange={(e) => setPdfPassword(e.target.value)}
+                placeholder="Enter PDF password (e.g. bank statement password)"
+                autoFocus
+                className="h-9 pr-9 bg-background"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && ready && !parsing) {
+                    e.preventDefault();
+                    onParse();
+                  }
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((v) => !v)}
+                aria-label={showPassword ? "Hide password" : "Show password"}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              >
+                {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            </div>
+            <Button
               type="button"
-              onClick={() => setShowPassword((v) => !v)}
-              aria-label={showPassword ? "Hide password" : "Show password"}
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              size="sm"
+              onClick={onParse}
+              disabled={!ready || parsing}
+              className="h-9 shrink-0"
             >
-              {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-            </button>
+              {parsing ? "Parsing…" : "Unlock & Parse"}
+            </Button>
           </div>
           {pdfPasswordError && (
             <p className="text-[11px] font-medium text-destructive">{pdfPasswordError}</p>
+          )}
+          {(!accountId || !bank) && (
+            <p className="text-[11px] text-muted-foreground">
+              Select an {!accountId && !bank ? "account and bank" : !accountId ? "account" : "bank"} above to enable parsing.
+            </p>
           )}
         </div>
       )}
@@ -363,10 +380,15 @@ export function ImportStep({
           />
         </div>
       )}
+      </div>
 
-      <div className="flex items-center justify-end gap-2 border-t pt-3">
+      <div className="mt-3 flex shrink-0 items-center justify-end gap-2 border-t pt-3">
         <span className="mr-auto text-[11px] text-muted-foreground">
-          Parsing runs in the background — you can keep working once review opens.
+          {!accountId || !bank
+            ? `Select an ${!accountId && !bank ? "account and bank" : !accountId ? "account" : "bank"} to continue.`
+            : isEncryptedPdf && !pdfPassword.trim()
+              ? "Enter the PDF password above to unlock and parse."
+              : "Parsing runs in the background — you can keep working once review opens."}
         </span>
         <Button onClick={onParse} disabled={!ready || parsing} size="sm">
           {parsing ? "Parsing…" : "Parse statement"}
