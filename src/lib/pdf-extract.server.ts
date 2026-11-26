@@ -107,7 +107,12 @@ export async function extractPdfText(
       pages: Array.isArray(fallback.text) ? fallback.text : [String(fallback.text ?? "")],
     };
   } finally {
-    await pdf.destroy().catch(() => undefined);
+    const doc = pdf as { destroy?: () => Promise<void>; cleanup?: () => Promise<void> };
+    if (typeof doc?.destroy === "function") {
+      await doc.destroy().catch(() => undefined);
+    } else if (typeof doc?.cleanup === "function") {
+      await doc.cleanup().catch(() => undefined);
+    }
   }
 }
 
