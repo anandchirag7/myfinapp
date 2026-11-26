@@ -390,7 +390,162 @@ export function extractRowsFromAOA(aoa: any[][]): ExtractedTxn[] {
   return out;
 }
 
-// ---------- PDF: decrypt/extract text via unpdf + parse transactions with Euri AI ----------
+// ---------- PDF: deterministic table extraction + parallel Euri AI fallback ----------
+
+const PDF_AMOUNT_RE = /^(?:(?:INR|RS\.?|₹)\s*)?(\d{1,3}(?:,\d{2,3})*\.\d{2}|\d+\.\d{2})(?:\s*(CR|DR))?$/i;
+const PDF_LEADING_DATE_RE =
+  /^(\d{4}-\d{1,2}-\d{1,2}|\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}|\d{1,2}[\-\s][A-Za-z]{3,}[\-\s]\d{2,4})(?:\s+(.*))?$/;
+const PDF_NOISE_LINE_RE =
+  /^(?:page\s+\d+(?:\s+of\s+\d+)?|statement\s+of\s+account|account\s+statement|generated\s+on|date\s*\|\s*narration|txn\s+date|transaction\s+date|opening\s+balance|closing\s+balance|total\b|\*\*+end\s+of\s+statement)/i;
+
+function parsePdfAmountCell(cell: string): { value: number; tag: "cr" | "dr" | null } | null {
+  const m = cell.trim().match(PDF_AMOUNT_RE);
+  if (!m) return null;
+  const value = Number(m[1]!.replace(/,/g, ""));
+  if (!Number.isFinite(value) || value < 0) return null;
+  const tag = m[2] ? (m[2].toLowerCase() as "cr" | "dr") : null;
+  return { value, tag };
+}
+
+export function extractPdfRowsDeterministic(pages: string[]): ExtractedTxn[] {
+  const lines = pages
+    .flatMap((page) => page.split(/\r?\n/))
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  let prevBalance: number | null = null;
+  const blocks: Array<{ date: string; cells: string[]; rowNumber: number }> = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    if (/opening\s+balance/i.test(line)) {
+      const cells = line.split(/\s*\|\s*/);
+      for (const c of cells) {
+        const amt = parsePdfAmountCell(c);
+        if (amt && amt.value > 0) prevBalance = amt.value;
+      }
+      continue;
+    }
+    if (PDF_NOISE_LINE_RE.test(line)) continue;
+
+    const rawCells = line.split(/\s*\|\s*/).map((c) => c.trim()).filter(Boolean);
+    if (!rawCells.length) continue;
+
+    const first = rawCells[0]!;
+    const leadMatch = first.match(PDF_LEADING_DATE_RE);
+    const parsedDate = leadMatch ? parseDate(leadMatch[1]) : parseDate(first);
+
+    if (parsedDate) {
+      const restOfFirst = leadMatch?.[2]?.trim();
+      const cells = [
+        ...(restOfFirst ? [restOfFirst] : []),
+        ...rawCells.slice(1),
+      ];
+      blocks.push({ date: parsedDate, cells, rowNumber: i + 1 });
+    } else if (blocks.length > 0 && blocks[blocks.length - 1]!.cells.length < 18) {
+      // Append wrapped narration/amount lines to the active transaction block.
+      const prev = blocks[blocks.length - 1]!;
+      const prevHasAmount = prev.cells.some((c) => parsePdfAmountCell(c) !== null);
+      const curHasAmount = rawCells.some((c) => parsePdfAmountCell(c) !== null);
+      if (!prevHasAmount || !curHasAmount) {
+        prev.cells.push(...rawCells);
+      }
+    }
+  }
+
+  const out: ExtractedTxn[] = [];
+  for (const block of blocks) {
+    const amounts: Array<{ value: number; tag: "cr" | "dr" | null }> = [];
+    const descParts: string[] = [];
+    let valueDate: string | null = null;
+    let reference: string | null = null;
+
+    for (const cell of block.cells) {
+      const amt = parsePdfAmountCell(cell);
+      if (amt) {
+        amounts.push(amt);
+        continue;
+      }
+      const d = parseDate(cell);
+      if (d && !valueDate) {
+        valueDate = d;
+        continue;
+      }
+      if (!reference && /^[A-Z0-9]{8,22}$/i.test(cell) && /\d{4,}/.test(cell)) {
+        reference = cell;
+        descParts.push(cell);
+        continue;
+      }
+      descParts.push(cell);
+    }
+
+    const description = descParts.join(" ").replace(/\s+/g, " ").trim();
+    if (!description || !amounts.length) continue;
+
+    let amount = 0;
+    let direction: "debit" | "credit" = "debit";
+    let closingBalance: number | null = null;
+
+    if (amounts.length >= 3) {
+      const d = amounts[0]!.value;
+      const c = amounts[1]!.value;
+      closingBalance = amounts[amounts.length - 1]!.value;
+      if (c > 0 && d === 0) {
+        amount = c;
+        direction = "credit";
+      } else {
+        amount = d > 0 ? d : c;
+        direction = d > 0 ? "debit" : "credit";
+      }
+    } else if (amounts.length === 2) {
+      amount = amounts[0]!.value;
+      closingBalance = amounts[1]!.value;
+      if (amounts[0]!.tag === "cr") {
+        direction = "credit";
+      } else if (amounts[0]!.tag === "dr") {
+        direction = "debit";
+      } else if (prevBalance !== null) {
+        if (Math.abs(prevBalance + amount - closingBalance) <= 0.05) {
+          direction = "credit";
+        } else if (Math.abs(prevBalance - amount - closingBalance) <= 0.05) {
+          direction = "debit";
+        } else if (/\b(CR|CREDIT|SALARY|REFUND|REVERSAL|CASHBACK|INTEREST|DIVIDEND)\b/i.test(description)) {
+          direction = "credit";
+        }
+      } else if (/\b(CR|CREDIT|SALARY|REFUND|REVERSAL|CASHBACK|INTEREST|DIVIDEND)\b/i.test(description)) {
+        direction = "credit";
+      }
+    } else {
+      amount = amounts[0]!.value;
+      if (
+        amounts[0]!.tag === "cr" ||
+        /\b(CR|CREDIT|PAYMENT RECEIVED|REFUND|REVERSAL|CASHBACK|SALARY)\b/i.test(description)
+      ) {
+        direction = "credit";
+      }
+    }
+
+    if (closingBalance !== null) prevBalance = closingBalance;
+    if (!Number.isFinite(amount) || amount <= 0) continue;
+
+    out.push({
+      date: block.date,
+      description,
+      amount,
+      type: direction === "credit" ? "income" : "expense",
+      direction,
+      valueDate,
+      reference,
+      debit: direction === "debit" ? amount : null,
+      credit: direction === "credit" ? amount : null,
+      closingBalance,
+      sourceRowNumber: block.rowNumber,
+      rawCells: [block.date, ...block.cells].map(serializableCell),
+    });
+  }
+
+  return out;
+}
 
 export async function parsePdfWithAI(
   base64: string,
@@ -403,10 +558,19 @@ export async function parsePdfWithAI(
 ): Promise<{ transactions: ExtractedTxn[] }> {
   const { extractPdfText, chunkPdfPages } = await import("./pdf-extract.server");
   const { createEuriClient } = await import("./euri.server");
+  const { withConcurrency } = await import("./statement-normalize");
 
   const bytes = new Uint8Array(Buffer.from(base64, "base64"));
   const { pages } = await extractPdfText(bytes, pdfPassword);
-  const chunks = chunkPdfPages(pages, 14_000);
+
+  // Fast path: deterministic layout-based table parser (~10ms, zero LLM timeout risk).
+  const deterministic = extractPdfRowsDeterministic(pages);
+  if (deterministic.length > 0) {
+    return { transactions: deterministic };
+  }
+
+  // Fallback: parallelized Euri AI extraction for non-standard PDF layouts.
+  const chunks = chunkPdfPages(pages, 8_000);
   if (!chunks.length) {
     return { transactions: [] };
   }
@@ -425,10 +589,8 @@ Rules:
 - Ignore opening/closing balance summaries, headers, footers, and page numbers
 - Do not invent transactions`;
 
-  const client = createEuriClient();
-  const extracted: ExtractedTxn[] = [];
-
-  for (const chunkText of chunks) {
+  const client = createEuriClient({ timeoutMs: 35_000, retries: 1 });
+  const chunkResults = await withConcurrency(chunks, 4, async (chunkText) => {
     const response = await client.chat(
       [
         { role: "system", content: systemPrompt },
@@ -437,7 +599,7 @@ Rules:
           content: `Extract every transaction from these statement pages:\n\n${chunkText}`,
         },
       ],
-      { format: "json", temperature: 0, numPredict: 16000 },
+      { format: "json", temperature: 0, numPredict: 4096 },
     );
     const content = response.message?.content ?? "{}";
     let parsed: any;
@@ -447,18 +609,20 @@ Rules:
       parsed = salvageJson(content) ?? { transactions: [] };
     }
     const txns = Array.isArray(parsed.transactions) ? parsed.transactions : [];
+    const items: ExtractedTxn[] = [];
     for (const t of txns) {
       if (!t?.date || !t?.description || t?.amount == null) continue;
       const amt = Math.abs(Number(t.amount));
       if (!Number.isFinite(amt) || amt <= 0) continue;
-      extracted.push({
+      items.push({
         date: String(t.date).slice(0, 10),
         description: String(t.description).trim(),
         amount: amt,
         type: (t.type as any) ?? "expense",
       });
     }
-  }
+    return items;
+  });
 
-  return { transactions: extracted };
+  return { transactions: chunkResults.flat() };
 }
