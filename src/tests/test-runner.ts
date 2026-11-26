@@ -12,6 +12,7 @@ import { registerObservabilityTests } from "./observability.test";
 import { registerInvestmentsCalcTests } from "./investments-calc.test";
 import { registerOllamaTests } from "./ollama.test";
 import { registerEuriTests } from "./euri.test";
+import { registerPdfExtractTests } from "./pdf-extract.test";
 import { registerStatementReleaseBTests } from "./statement-release-b.test";
 import { registerStatementReleaseCTests } from "./statement-release-c.test";
 import { registerStatementReleaseDTests } from "./statement-release-d.test";
@@ -39,6 +40,7 @@ async function main() {
   registerInvestmentsCalcTests();
   registerOllamaTests();
   registerEuriTests();
+  registerPdfExtractTests();
   registerStatementReleaseBTests();
   registerStatementReleaseCTests();
   registerStatementReleaseDTests();

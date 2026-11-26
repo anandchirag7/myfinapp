@@ -12,8 +12,12 @@ import {
   Coins,
   Rows3,
   Files,
+  Lock,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -78,6 +82,9 @@ export function ImportStep({
   parsing,
   onParse,
   progress,
+  pdfPassword,
+  setPdfPassword,
+  pdfPasswordError,
 }: {
   accounts: Array<{ id: string; name: string }>;
   accountId: string;
@@ -92,10 +99,14 @@ export function ImportStep({
   parsing: boolean;
   onParse: () => void;
   progress: number;
+  pdfPassword: string;
+  setPdfPassword: (v: string) => void;
+  pdfPasswordError?: string | null;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   const accept = useCallback(
     async (f: File | null) => {
@@ -114,7 +125,15 @@ export function ImportStep({
 
   const errors = detection?.issues.filter((i) => i.level === "error") ?? [];
   const warnings = detection?.issues.filter((i) => i.level === "warning") ?? [];
-  const ready = !!accountId && !!bank && !!file && errors.length === 0;
+  const isEncryptedPdf =
+    detection?.format === "pdf" &&
+    (detection.issues.some((i) => i.code === "encrypted") || Boolean(pdfPasswordError));
+  const ready =
+    !!accountId &&
+    !!bank &&
+    !!file &&
+    errors.length === 0 &&
+    (!isEncryptedPdf || pdfPassword.trim().length > 0);
 
   const period = useMemo(() => {
     if (!detection?.periodStart) return "—";
@@ -296,6 +315,42 @@ export function ImportStep({
                 </li>
               ))}
             </ul>
+          )}
+        </div>
+      )}
+
+      {isEncryptedPdf && !busy && (
+        <div className="rounded-xl border border-warning/40 bg-warning/10 p-3 space-y-2">
+          <div className="flex items-center gap-2 text-xs font-medium">
+            <Lock className="h-3.5 w-3.5 text-warning shrink-0" aria-hidden />
+            <span>PDF Password Required</span>
+          </div>
+          <div className="relative">
+            <Input
+              type={showPassword ? "text" : "password"}
+              value={pdfPassword}
+              onChange={(e) => setPdfPassword(e.target.value)}
+              placeholder="Enter PDF password (e.g. bank statement password)"
+              autoFocus
+              className="h-9 pr-9 bg-background"
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && ready && !parsing) {
+                  e.preventDefault();
+                  onParse();
+                }
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword((v) => !v)}
+              aria-label={showPassword ? "Hide password" : "Show password"}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+            >
+              {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+            </button>
+          </div>
+          {pdfPasswordError && (
+            <p className="text-[11px] font-medium text-destructive">{pdfPasswordError}</p>
           )}
         </div>
       )}

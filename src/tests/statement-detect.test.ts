@@ -63,5 +63,15 @@ export function registerStatementDetectTests() {
       expect(result.issues.some((i) => i.code === "empty")).toBeTruthy();
       expect(result.confidence).toBe(0);
     });
+
+    it("flags encrypted PDFs with a non-blocking warning so user can enter password", async () => {
+      const pdfHeader = "%PDF-1.7\n1 0 obj\n<< /Encrypt 2 0 R >>\nendobj\n";
+      const file = new File([pdfHeader], "hdfc_statement.pdf", { type: "application/pdf" });
+      const result = await inspectStatementFile(file);
+
+      const encIssue = result.issues.find((i) => i.code === "encrypted");
+      expect(Boolean(encIssue)).toBe(true);
+      expect(encIssue?.level).toBe("warning");
+    });
   });
 }

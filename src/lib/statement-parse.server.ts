@@ -390,7 +390,7 @@ export function extractRowsFromAOA(aoa: any[][]): ExtractedTxn[] {
   return out;
 }
 
-// ---------- PDF: still needs AI for extraction ----------
+// ---------- PDF: decrypt/extract text via unpdf + parse transactions with Euri AI ----------
 
 export async function parsePdfWithAI(
   base64: string,
@@ -399,10 +399,20 @@ export async function parsePdfWithAI(
   categoryList: string,
   payeeList: string,
   _apiKey?: string,
+  pdfPassword?: string,
 ): Promise<{ transactions: ExtractedTxn[] }> {
+  const { extractPdfText, chunkPdfPages } = await import("./pdf-extract.server");
   const { createEuriClient } = await import("./euri.server");
 
-  const systemPrompt = `You extract bank/credit-card statement transactions from a PDF.
+  const bytes = new Uint8Array(Buffer.from(base64, "base64"));
+  const { pages } = await extractPdfText(bytes, pdfPassword);
+  const chunks = chunkPdfPages(pages, 14_000);
+  if (!chunks.length) {
+    return { transactions: [] };
+  }
+
+  const systemPrompt = `You extract bank/credit-card statement transactions from extracted PDF statement text.
+File: ${fileName}
 Bank: ${bank}
 Available categories: ${categoryList}
 Existing memorized payees: ${payeeList || "(none)"}
@@ -411,42 +421,44 @@ Return ONLY valid JSON:
 { "transactions": [ { "date": "YYYY-MM-DD", "description": "raw narration", "amount": 1234.56, "type": "income" | "expense" | "transfer" } ] }
 Rules:
 - amount is always positive
-- money out => expense, money in => income, own-account moves => transfer
-- Ignore balance/header/footer rows
+- money out / debit / withdrawal => expense, money in / credit / deposit => income, own-account moves => transfer
+- Ignore opening/closing balance summaries, headers, footers, and page numbers
 - Do not invent transactions`;
 
-  const response = await createEuriClient().chat(
-    [
-      { role: "system", content: systemPrompt },
-      {
-        role: "user",
-        content: [
-          { type: "text", text: "Extract every transaction from this PDF statement." },
-          {
-            type: "file",
-            file: { filename: fileName, file_data: `data:application/pdf;base64,${base64}` },
-          },
-        ],
-      },
-    ],
-    { format: "json", temperature: 0, numPredict: 32000 },
-  );
-  const content = response.message?.content ?? "{}";
-  let parsed: any;
-  try {
-    parsed = JSON.parse(content);
-  } catch {
-    parsed = salvageJson(content) ?? { transactions: [] };
-  }
-  const txns = Array.isArray(parsed.transactions) ? parsed.transactions : [];
-  return {
-    transactions: txns
-      .filter((t: any) => t?.date && t?.description && t?.amount)
-      .map((t: any) => ({
+  const client = createEuriClient();
+  const extracted: ExtractedTxn[] = [];
+
+  for (const chunkText of chunks) {
+    const response = await client.chat(
+      [
+        { role: "system", content: systemPrompt },
+        {
+          role: "user",
+          content: `Extract every transaction from these statement pages:\n\n${chunkText}`,
+        },
+      ],
+      { format: "json", temperature: 0, numPredict: 16000 },
+    );
+    const content = response.message?.content ?? "{}";
+    let parsed: any;
+    try {
+      parsed = JSON.parse(content);
+    } catch {
+      parsed = salvageJson(content) ?? { transactions: [] };
+    }
+    const txns = Array.isArray(parsed.transactions) ? parsed.transactions : [];
+    for (const t of txns) {
+      if (!t?.date || !t?.description || t?.amount == null) continue;
+      const amt = Math.abs(Number(t.amount));
+      if (!Number.isFinite(amt) || amt <= 0) continue;
+      extracted.push({
         date: String(t.date).slice(0, 10),
-        description: String(t.description),
-        amount: Math.abs(Number(t.amount)),
+        description: String(t.description).trim(),
+        amount: amt,
         type: (t.type as any) ?? "expense",
-      })),
-  };
+      });
+    }
+  }
+
+  return { transactions: extracted };
 }

@@ -254,9 +254,9 @@ export async function inspectStatementFile(
     }
     if (/\/Encrypt\b/.test(sample)) {
       issues.push({
-        level: "error",
+        level: "warning",
         code: "encrypted",
-        message: "This PDF is password protected. Remove the password and re-upload.",
+        message: "This PDF is password protected. Enter the password below to unlock and ingest it.",
       });
     }
     const countMatch = /\/Count\s+(\d{1,5})/.exec(sample);

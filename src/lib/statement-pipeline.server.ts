@@ -81,7 +81,7 @@ async function getHouseholdId(supabase: any, userId: string): Promise<string> {
 async function parseFile(
   supabase: any,
   householdId: string,
-  input: { bank: string; fileName: string; mimeType: string; base64: string },
+  input: { bank: string; fileName: string; mimeType: string; base64: string; pdfPassword?: string },
 ): Promise<ParsedStatement> {
   const lower = input.fileName.toLowerCase();
   const isPdf = input.mimeType === "application/pdf" || lower.endsWith(".pdf");
@@ -141,6 +141,8 @@ async function parseFile(
       input.bank,
       (cats ?? []).map((c: any) => c.name).join(", "),
       "",
+      undefined,
+      input.pdfPassword,
     );
     return { transactions, controls: null };
   }
@@ -168,7 +170,7 @@ export type UploadResult = {
 export async function runStatementUpload(opts: {
   supabase: any;
   userId: string;
-  input: { accountId: string; bank: string; fileName: string; mimeType: string; base64: string };
+  input: { accountId: string; bank: string; fileName: string; mimeType: string; base64: string; pdfPassword?: string };
   origin: string;
   /** Re-parse of an existing archived upload: reuse the row, skip re-archiving. */
   existingUploadId?: string;

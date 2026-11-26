@@ -11,6 +11,7 @@ const startInput = z.object({
   // Roughly 27 MB decoded. Keep the server boundary bounded even if browser
   // inspection is bypassed.
   base64: z.string().min(1).max(36_000_000),
+  pdfPassword: z.string().max(200).optional(),
 });
 
 /**

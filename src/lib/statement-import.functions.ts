@@ -429,6 +429,7 @@ const parseInput = z.object({
   fileName: z.string(),
   mimeType: z.string(),
   base64: z.string(),
+  pdfPassword: z.string().max(200).optional(),
 });
 
 // ---------- AI Statement Metadata Inspection ----------
@@ -600,6 +601,8 @@ export const extractStatementRows = createServerFn({ method: "POST" })
         data.bank,
         categoryList,
         existingPayees.map((p: any) => p.merchant).join(", "),
+        undefined,
+        data.pdfPassword,
       );
       extracted = transactions;
     } else {

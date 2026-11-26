@@ -211,6 +211,8 @@ export function StatementImportDialog({
   const [bank, setBank] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [detection, setDetection] = useState<StatementDetection | null>(null);
+  const [pdfPassword, setPdfPassword] = useState("");
+  const [pdfPasswordError, setPdfPasswordError] = useState<string | null>(null);
   const [seenFingerprints, setSeenFingerprints] = useState<string[]>([]);
   const [parsing, setParsing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -445,6 +447,7 @@ export function StatementImportDialog({
           fileName: file.name,
           mimeType: file.type || "application/octet-stream",
           base64,
+          pdfPassword: pdfPassword.trim() || undefined,
         },
         signal: controller.signal,
       } as any);
@@ -727,10 +730,44 @@ export function StatementImportDialog({
       }
       setOperation("Failed");
       setStage("parse", { state: "error", detail: e?.message ?? "parse failed" });
+      const msg = String(e?.message ?? "Unknown error");
+      if (msg.includes("PDF_INCORRECT_PASSWORD")) {
+        setPdfPasswordError("Incorrect PDF password. Please check and try again.");
+        setActivity({
+          kind: "error",
+          label: "Incorrect PDF password",
+          detail: "Enter the correct password and try parsing again.",
+        });
+        toast.error("Incorrect PDF password");
+        setStep("import");
+        return;
+      }
+      if (msg.includes("PDF_PASSWORD_REQUIRED")) {
+        setPdfPasswordError("This PDF is password protected. Please enter the password.");
+        setDetection((prev) =>
+          prev && !prev.issues.some((i) => i.code === "encrypted")
+            ? {
+                ...prev,
+                issues: [
+                  ...prev.issues,
+                  {
+                    level: "warning",
+                    code: "encrypted",
+                    message:
+                      "This PDF is password protected. Enter the password below to unlock and ingest it.",
+                  },
+                ],
+              }
+            : prev,
+        );
+        toast.error("PDF password required");
+        setStep("import");
+        return;
+      }
       setActivity({
         kind: "error",
         label: "Parsing failed — no transactions were saved",
-        detail: e?.message ?? "Unknown error",
+        detail: msg,
       });
       toast.error(e?.message ?? "Failed to parse statement");
       notify("failed", false, "Statement parsing failed", [
@@ -1367,9 +1404,13 @@ export function StatementImportDialog({
               onFile={async (f, d) => {
                 setFile(f);
                 setDetection(d);
+                setPdfPassword("");
+                setPdfPasswordError(null);
+                const isEncrypted = d?.issues.some((i) => i.code === "encrypted");
                 if (
                   f &&
                   d &&
+                  !isEncrypted &&
                   (d.format === "pdf" ||
                     d.format === "csv" ||
                     d.format === "xlsx" ||
@@ -1425,6 +1466,12 @@ export function StatementImportDialog({
               parsing={parsing}
               onParse={onParse}
               progress={0}
+              pdfPassword={pdfPassword}
+              setPdfPassword={(v) => {
+                setPdfPassword(v);
+                if (pdfPasswordError) setPdfPasswordError(null);
+              }}
+              pdfPasswordError={pdfPasswordError}
             />
           )}
 
