@@ -1192,62 +1192,66 @@ export const bulkInsertTransactions = createServerFn({ method: "POST" })
       );
       const recurringMandateIdByKey = new Map<string, string>();
       if (candidateByKey.size) {
-        const candidateKeys = [...candidateByKey.keys()];
-        const { data: existingMandates, error: existingMandatesError } = await (
-          context.supabase as any
-        )
-          .from("recurring_mandates")
-          .select("id,candidate_key")
-          .eq("household_id", householdId)
-          .eq("account_id", data.accountId)
-          .in("candidate_key", candidateKeys);
-        if (existingMandatesError) throw existingMandatesError;
-        const existingKeys = new Set(
-          (existingMandates ?? []).map((row: any) => String(row.candidate_key)),
-        );
-        const newCandidates = [...candidateByKey.entries()].filter(([key]) => !existingKeys.has(key));
-        if (newCandidates.length) {
-          const { data: insertedMandates, error: mandateInsertError } = await (
+        try {
+          const candidateKeys = [...candidateByKey.keys()];
+          const { data: existingMandates, error: existingMandatesError } = await (
             context.supabase as any
           )
             .from("recurring_mandates")
-            .insert(
-              newCandidates.map(([key, transaction]) => {
-                const candidate = transaction.recurring_candidate!;
-                return {
-                  household_id: householdId,
-                  account_id: data.accountId,
-                  candidate_key: key,
-                  entity_id: transaction.canonical_entity_id ?? null,
-                  provider_key: candidate.providerKey,
-                  mandate_reference: candidate.mandateReference,
-                  expected_amount: candidate.expectedAmount,
-                  amount_tolerance: candidate.amountTolerance,
-                  cadence: candidate.cadence,
-                  expected_day: candidate.expectedDay,
-                  window_days: candidate.windowDays,
-                  economic_type: transaction.economic_type ?? "UNKNOWN",
-                  status: "active",
-                  observation_count: candidate.observationKeys.length,
-                  first_observed_on: candidate.firstObservedOn,
-                  last_observed_on: candidate.lastObservedOn,
-                  created_by: context.userId,
-                };
-              }),
+            .select("id,candidate_key")
+            .eq("household_id", householdId)
+            .eq("account_id", data.accountId)
+            .in("candidate_key", candidateKeys);
+          if (existingMandatesError) throw existingMandatesError;
+          const existingKeys = new Set(
+            (existingMandates ?? []).map((row: any) => String(row.candidate_key)),
+          );
+          const newCandidates = [...candidateByKey.entries()].filter(([key]) => !existingKeys.has(key));
+          if (newCandidates.length) {
+            const { data: insertedMandates, error: mandateInsertError } = await (
+              context.supabase as any
             )
-            .select("id,candidate_key");
-          if (mandateInsertError) throw mandateInsertError;
-          for (const row of insertedMandates ?? []) newMandateIds.push(String(row.id));
+              .from("recurring_mandates")
+              .insert(
+                newCandidates.map(([key, transaction]) => {
+                  const candidate = transaction.recurring_candidate!;
+                  return {
+                    household_id: householdId,
+                    account_id: data.accountId,
+                    candidate_key: key,
+                    entity_id: transaction.canonical_entity_id ?? null,
+                    provider_key: candidate.providerKey,
+                    mandate_reference: candidate.mandateReference,
+                    expected_amount: candidate.expectedAmount,
+                    amount_tolerance: candidate.amountTolerance,
+                    cadence: candidate.cadence,
+                    expected_day: candidate.expectedDay,
+                    window_days: candidate.windowDays,
+                    economic_type: transaction.economic_type ?? "UNKNOWN",
+                    status: "active",
+                    observation_count: candidate.observationKeys.length,
+                    first_observed_on: candidate.firstObservedOn,
+                    last_observed_on: candidate.lastObservedOn,
+                    created_by: context.userId,
+                  };
+                }),
+              )
+              .select("id,candidate_key");
+            if (mandateInsertError) throw mandateInsertError;
+            for (const row of insertedMandates ?? []) newMandateIds.push(String(row.id));
+          }
+          const { data: allMandates, error: mandateLoadError } = await (context.supabase as any)
+            .from("recurring_mandates")
+            .select("id,candidate_key")
+            .eq("household_id", householdId)
+            .eq("account_id", data.accountId)
+            .in("candidate_key", candidateKeys);
+          if (mandateLoadError) throw mandateLoadError;
+          for (const row of allMandates ?? [])
+            recurringMandateIdByKey.set(String(row.candidate_key), String(row.id));
+        } catch (mandateErr: any) {
+          console.warn("[statement-import] skipping recurring_mandates sync:", mandateErr?.message ?? mandateErr);
         }
-        const { data: allMandates, error: mandateLoadError } = await (context.supabase as any)
-          .from("recurring_mandates")
-          .select("id,candidate_key")
-          .eq("household_id", householdId)
-          .eq("account_id", data.accountId)
-          .in("candidate_key", candidateKeys);
-        if (mandateLoadError) throw mandateLoadError;
-        for (const row of allMandates ?? [])
-          recurringMandateIdByKey.set(String(row.candidate_key), String(row.id));
       }
       for (const transaction of data.transactions) {
         (transaction as typeof transaction & { recurring_mandate_id?: string | null }).recurring_mandate_id =
