@@ -61,8 +61,8 @@ export async function processOneStatementClassification(admin: any) {
       current_attempt: attempt,
       heartbeat_at: new Date().toISOString(),
       resolver_version: message.resolverVersion,
-      provider: "ollama",
-      model: process.env.OLLAMA_MODEL ?? null,
+      provider: "euri",
+      model: process.env.EURI_MODEL ?? "euri-chat-fast",
     })
     .eq("id", message.uploadId);
 

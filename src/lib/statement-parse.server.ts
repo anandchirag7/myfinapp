@@ -400,7 +400,7 @@ export async function parsePdfWithAI(
   payeeList: string,
   _apiKey?: string,
 ): Promise<{ transactions: ExtractedTxn[] }> {
-  const { createOllamaClient } = await import("./ollama.server");
+  const { createEuriClient } = await import("./euri.server");
 
   const systemPrompt = `You extract bank/credit-card statement transactions from a PDF.
 Bank: ${bank}
@@ -415,7 +415,7 @@ Rules:
 - Ignore balance/header/footer rows
 - Do not invent transactions`;
 
-  const response = await createOllamaClient().chat(
+  const response = await createEuriClient().chat(
     [
       { role: "system", content: systemPrompt },
       {

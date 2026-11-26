@@ -573,11 +573,11 @@ export const generateAIInsights = createServerFn({ method: "POST" })
       c: (r as any).category?.name ?? "Uncategorized",
     }));
 
-    const key = process.env.LOVABLE_API_KEY;
-    const baseURL = process.env.OLLAMA_BASE_URL || "https://ai.gateway.lovable.dev/v1";
-    const model = process.env.OLLAMA_MODEL || "google/gemini-2.5-flash";
+    const key = process.env.EURI_API_KEY?.trim();
+    const baseURL = (process.env.EURI_BASE_URL || "https://api.euron.one/api/v1/euri").replace(/\/+$/, "");
+    const model = process.env.EURI_MODEL || "euri-chat-fast";
 
-    if (!key && !process.env.OLLAMA_BASE_URL) {
+    if (!key) {
       return { insights: heuristicInsights(bag) };
     }
 
@@ -587,8 +587,8 @@ Rules: no fluff, use ₹ for amounts, be specific with numbers/merchants/categor
 
     const userPrompt = `Transactions (${bag.length} items):\n${JSON.stringify(bag).slice(0, 15000)}`;
 
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (key) headers["Lovable-API-Key"] = key;
+    const headers: Record<string, string> = { "Content-Type": "application/json", Authorization: `Bearer ${key}` };
+    // Auth header set above for Euri API
 
     try {
       const res = await fetch(`${baseURL}/chat/completions`, {

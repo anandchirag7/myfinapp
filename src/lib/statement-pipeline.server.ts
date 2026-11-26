@@ -129,8 +129,8 @@ async function parseFile(
   }
 
   if (isPdf) {
-    const { createOllamaClient } = await import("./ollama.server");
-    await createOllamaClient().checkAvailability();
+    const { createEuriClient } = await import("./euri.server");
+    await createEuriClient().checkAvailability();
     const { data: cats } = await supabase
       .from("categories")
       .select("name")
@@ -628,8 +628,8 @@ export async function runStatementUpload(opts: {
         .update({
           status: "queued",
           resolver_version: STATEMENT_RESOLVER_VERSION,
-          provider: "ollama",
-          model: process.env.OLLAMA_MODEL ?? null,
+          provider: "euri",
+          model: process.env.EURI_MODEL ?? "euri-chat-fast",
           idempotency_key: idempotencyKey,
           failed_patterns: 0,
           current_attempt: 0,
@@ -660,11 +660,11 @@ export async function runStatementUpload(opts: {
       classificationStatus = "queued";
     } else if (needsAi) {
       try {
-        const { createOllamaClient } = await import("./ollama.server");
-        // Check connectivity/model presence without a one-shot JSON canary.
+        const { createEuriClient } = await import("./euri.server");
+        // Check connectivity/credentials without a one-shot JSON canary.
         // The classifier itself has retry, batch bisection, and deterministic
         // fallback, so malformed model JSON must reach that recovery path.
-        await createOllamaClient().checkAvailability();
+        await createEuriClient().checkAvailability();
         const { classifyPendingPatterns } = await import("./statement-classify.server");
         const classified = await classifyPendingPatterns({
           // Local/synchronous imports already carry the authenticated user

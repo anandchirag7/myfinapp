@@ -2,7 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { getHouseholdId } from "@/lib/household.server";
-import { createOllamaClient } from "./ollama.server";
+import { createEuriClient } from "./euri.server";
 import { parseManualCategoryAssignments } from "./statement-classification-policy";
 import { buildTransferEvidenceDescriptor, transactionInsertFields } from "./statement-transfers";
 import { ECONOMIC_TYPES } from "./statement-domain";
@@ -444,7 +444,7 @@ export const inspectStatementWithAI = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => inspectAiInput.parse(d))
   .handler(async ({ data }) => {
     try {
-      const response = await createOllamaClient().chat(
+      const response = await createEuriClient().chat(
         [
           {
             role: "system",
@@ -592,7 +592,7 @@ export const extractStatementRows = createServerFn({ method: "POST" })
       }
       extracted = extractRowsFromAOA(aoa);
     } else if (isPdf) {
-      await createOllamaClient().checkAvailability();
+      await createEuriClient().checkAvailability();
       const categoryList = (cats ?? []).map((c: any) => c.name).join(", ");
       const { transactions } = await parsePdfWithAI(
         data.base64,
@@ -699,7 +699,7 @@ export const polishPayeeNames = createServerFn({ method: "POST" })
       .map((c, i) => `${i}| ${c.name} | ${c.count} txns | e.g. ${c.sample.slice(0, 120)}`)
       .join("\n");
 
-    const response = await createOllamaClient().chat(
+    const response = await createEuriClient().chat(
       [
         {
           role: "system",
@@ -789,7 +789,7 @@ export const categorizePayeeClusters = createServerFn({ method: "POST" })
         }),
       ),
     });
-    const parsed = await createOllamaClient().chatJson(
+    const parsed = await createEuriClient().chatJson(
       [
         {
           role: "system",

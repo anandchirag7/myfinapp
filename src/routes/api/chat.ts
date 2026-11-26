@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@supabase/supabase-js";
 import { convertToModelMessages, streamText, tool, stepCountIs, type UIMessage } from "ai";
 import { z } from "zod";
-import { createLovableAiGatewayProvider } from "@/lib/ai-gateway.server";
+import { createEuriGatewayProvider } from "@/lib/ai-gateway.server";
 import { getHouseholdId } from "@/lib/household.server";
 
 function makeSupabase(token: string) {
@@ -50,11 +50,11 @@ export const Route = createFileRoute("/api/chat")({
         const threadId = body.threadId;
         if (!threadId) return new Response("Missing threadId", { status: 400 });
 
-        const key = process.env.LOVABLE_API_KEY;
-        if (!key && !process.env.OLLAMA_BASE_URL) return new Response("Missing LOVABLE_API_KEY or OLLAMA_BASE_URL", { status: 500 });
+        const key = process.env.EURI_API_KEY;
+        if (!key) return new Response("Missing EURI_API_KEY", { status: 500 });
 
-        const gateway = createLovableAiGatewayProvider(key);
-        const modelName = process.env.OLLAMA_MODEL || "openai/gpt-5.5";
+        const gateway = createEuriGatewayProvider(key);
+        const modelName = process.env.EURI_SMART_MODEL || process.env.EURI_MODEL || "euri-chat-smart";
 
         // Pre-fetch quick context summary for the system prompt.
         const [{ data: profile }, { data: accounts }, { data: catsAgg }] = await Promise.all([
@@ -204,6 +204,9 @@ You have read-only tools to fetch the user's actual data when the question needs
           messages: await convertToModelMessages(body.messages),
           tools,
           stopWhen: stepCountIs(50),
+          onError: ({ error }) => {
+            console.error("[Ask Paisa /api/chat] stream error:", error);
+          },
         });
 
         return result.toUIMessageStreamResponse({

@@ -27,7 +27,7 @@ import {
   type CategoryIndex,
 } from "./category-resolver";
 import { z } from "zod";
-import { createOllamaClient, OllamaError } from "./ollama.server";
+import { createEuriClient, EuriError } from "./euri.server";
 import { runWithBatchRecovery } from "./batch-recovery";
 import {
   resolveCategoryKey,
@@ -286,7 +286,7 @@ export async function resolveFromLookups(
 
   // Semantic retrieval is attempted only after stronger exact household and
   // dictionary evidence. It is accepted only with token corroboration.
-  if (resolverV2Enabled && householdId && unresolved.length && process.env.OLLAMA_EMBED_MODEL) {
+  if (resolverV2Enabled && householdId && unresolved.length && process.env.EURI_API_KEY && process.env.EURI_EMBED_MODEL) {
     try {
       const { retrieveVerifiedEntities } = await import("./statement-embedding.server");
       const { resolveVerifiedEntityCategory } = await import("./statement-embedding.server");
@@ -311,15 +311,15 @@ export async function resolveFromLookups(
       }
       return { resolved, unresolved: unresolved.filter((p) => !semanticallyComplete.has(p)) };
     } catch {
-      // Embeddings are an optimization; Ollama classification remains available.
+      // Embeddings are an optimization; Euri classification remains available.
     }
   }
 
   return { resolved, unresolved };
 }
 
-const BATCH_SIZE = Math.min(15, Math.max(1, Number(process.env.OLLAMA_BATCH_SIZE || 12)));
-const CONCURRENCY = Math.min(2, Math.max(1, Number(process.env.OLLAMA_CONCURRENCY || 1)));
+const BATCH_SIZE = Math.min(25, Math.max(1, Number(process.env.EURI_BATCH_SIZE || process.env.AI_BATCH_SIZE || 15)));
+const CONCURRENCY = Math.min(4, Math.max(1, Number(process.env.EURI_CONCURRENCY || process.env.AI_CONCURRENCY || 2)));
 
 type Sample = { pattern: string; samples: string[]; type: string; counterpartyKind?: string };
 
@@ -330,12 +330,12 @@ async function classifyBatch(
   userCategoryNames?: string[],
   llmRuleContext: string[] = [],
 ): Promise<ResolvedMap> {
-  const configuredContextTokens = Number(process.env.OLLAMA_NUM_CTX || 2_048);
+  const configuredContextTokens = Number(process.env.EURI_NUM_CTX || 16_384);
   const context = buildClassificationContext({
     categoryNames: (userCategoryNames ?? []).slice(0, 250),
     ruleInstructions: llmRuleContext.slice(0, 50),
     maxChars: Number(
-      process.env.OLLAMA_PROMPT_CONTEXT_CHARS || Math.max(800, configuredContextTokens * 3 - 4_500),
+      process.env.EURI_PROMPT_CONTEXT_CHARS || Math.max(800, configuredContextTokens * 3 - 4_500),
     ),
   });
   const allowedCategoryNames = context.categoryNames;
@@ -380,7 +380,7 @@ Rules:
       }),
     ),
   });
-  const parsed = await createOllamaClient().chatJson(
+  const parsed = await createEuriClient().chatJson(
     [
       { role: "system", content: system },
       { role: "user", content: user },
@@ -412,7 +412,7 @@ Rules:
       requiresReview: true,
       blockingReason: null,
       evidence: [
-        "ollama",
+        "euri",
         ...(r.category_name &&
         canonicalCategoryByLower.has(r.category_name.trim().toLocaleLowerCase())
           ? ["household_category"]
@@ -422,9 +422,9 @@ Rules:
     });
   }
   if (Object.keys(out).length !== batch.length) {
-    throw new OllamaError(
+    throw new EuriError(
       "schema_validation",
-      `Ollama returned ${Object.keys(out).length} of ${batch.length} requested patterns`,
+      `Euri returned ${Object.keys(out).length} of ${batch.length} requested patterns`,
       true,
     );
   }
@@ -498,7 +498,7 @@ export async function classifyPendingPatterns(opts: {
       labelled = Object.assign({}, ...recovered.results);
     } catch (error) {
       lastError = error;
-      retryCount += error instanceof OllamaError && error.retryable ? 1 : 0;
+      retryCount += error instanceof EuriError && error.retryable ? 1 : 0;
     }
 
     if (categoryIndex) {

@@ -1,4 +1,4 @@
-import { createOllamaClient } from "./ollama.server";
+import { createEuriClient } from "./euri.server";
 import { normalizePattern } from "./statement-normalize";
 import type { CategoryIndex } from "./category-resolver";
 import {
@@ -55,9 +55,9 @@ export async function retrieveVerifiedEntities(
   patterns: string[],
 ): Promise<Map<string, VerifiedEntityMatch>> {
   const matches = new Map<string, VerifiedEntityMatch>();
-  if (!patterns.length || !process.env.OLLAMA_EMBED_MODEL) return matches;
+  if (!patterns.length || !process.env.EURI_API_KEY || !process.env.EURI_EMBED_MODEL) return matches;
 
-  const embeddings = (await createOllamaClient().embed(patterns)).embeddings ?? [];
+  const embeddings = (await createEuriClient().embed(patterns)).embeddings ?? [];
   await Promise.all(
     patterns.map(async (pattern, index) => {
       const embedding = embeddings[index];

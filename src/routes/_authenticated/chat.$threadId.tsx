@@ -82,7 +82,7 @@ function ChatInner({
     [threadId],
   );
 
-  const { messages, sendMessage, status } = useChat({
+  const { messages, sendMessage, status, error } = useChat({
     id: threadId,
     messages: initialMessages,
     transport,
@@ -150,6 +150,11 @@ function ChatInner({
                 <Shimmer>Thinking…</Shimmer>
               </MessageContent>
             </Message>
+          )}
+          {error && (
+            <div className="mx-auto my-2 max-w-xl rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              {error.message || "Failed to get a response from Ask Paisa. Check your EURI_API_KEY and server logs."}
+            </div>
           )}
         </ConversationContent>
         <ConversationScrollButton />

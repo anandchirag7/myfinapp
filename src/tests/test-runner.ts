@@ -11,6 +11,7 @@ import { registerFinanceMathTests } from "./finance-math.test";
 import { registerObservabilityTests } from "./observability.test";
 import { registerInvestmentsCalcTests } from "./investments-calc.test";
 import { registerOllamaTests } from "./ollama.test";
+import { registerEuriTests } from "./euri.test";
 import { registerStatementReleaseBTests } from "./statement-release-b.test";
 import { registerStatementReleaseCTests } from "./statement-release-c.test";
 import { registerStatementReleaseDTests } from "./statement-release-d.test";
@@ -37,6 +38,7 @@ async function main() {
   registerObservabilityTests();
   registerInvestmentsCalcTests();
   registerOllamaTests();
+  registerEuriTests();
   registerStatementReleaseBTests();
   registerStatementReleaseCTests();
   registerStatementReleaseDTests();
