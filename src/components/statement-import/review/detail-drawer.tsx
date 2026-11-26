@@ -49,6 +49,30 @@ export const TransactionDetailDrawer = memo(function TransactionDetailDrawer({
             <Field label="Category">
               <span>{category}</span>
             </Field>
+            <Field label="Economic meaning">
+              <div className="space-y-1">
+                <span>{row.economic_type ?? "UNKNOWN"}</span>
+                {row.economic_confidence != null && (
+                  <span className="ml-2 text-muted-foreground">
+                    {Math.round(row.economic_confidence * 100)}% confidence
+                  </span>
+                )}
+                {row.economic_reasons?.map((reason) => (
+                  <p key={reason} className="text-muted-foreground">{reason}</p>
+                ))}
+              </div>
+            </Field>
+            <Field label="Statement evidence">
+              <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 font-mono">
+                <dt className="text-muted-foreground">Source row</dt><dd>{row.source_row_number ?? "—"}</dd>
+                <dt className="text-muted-foreground">Value date</dt><dd>{row.value_date ?? "—"}</dd>
+                <dt className="text-muted-foreground">Reference</dt><dd className="break-all">{row.original_reference ?? "—"}</dd>
+                <dt className="text-muted-foreground">Rail</dt><dd>{row.payment_rail ?? "—"}</dd>
+                <dt className="text-muted-foreground">Debit</dt><dd>{row.debit == null ? "—" : money(row.debit)}</dd>
+                <dt className="text-muted-foreground">Credit</dt><dd>{row.credit == null ? "—" : money(row.credit)}</dd>
+                <dt className="text-muted-foreground">Closing</dt><dd>{row.closing_balance == null ? "—" : money(row.closing_balance)}</dd>
+              </dl>
+            </Field>
             <Field label="Status">
               <span>
                 {row.include ? "Will be imported" : "Excluded"}

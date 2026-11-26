@@ -43,8 +43,10 @@ function toCells(
   ]);
 }
 
-function escapeCsv(v: unknown): string {
-  const s = v == null ? "" : String(v);
+export function escapeStatementCsvCell(v: unknown): string {
+  let s = v == null ? "" : String(v);
+  // Spreadsheet programs may execute untrusted statement text as a formula.
+  if (/^[\t\r ]*[=+\-@]/.test(s)) s = `'${s}`;
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
@@ -78,10 +80,12 @@ export function exportImportToCSV(
   lines.push(`# Period: ${meta.from} to ${meta.to}`);
   lines.push(`# Generated: ${new Date().toISOString()}`);
   lines.push("");
-  for (const [label, value] of summary) lines.push(`${escapeCsv(label)},${escapeCsv(value)}`);
+  for (const [label, value] of summary)
+    lines.push(`${escapeStatementCsvCell(label)},${escapeStatementCsvCell(value)}`);
   lines.push("");
-  lines.push(COLUMNS.map(escapeCsv).join(","));
-  for (const cells of toCells(rows, categoryName)) lines.push(cells.map(escapeCsv).join(","));
+  lines.push(COLUMNS.map(escapeStatementCsvCell).join(","));
+  for (const cells of toCells(rows, categoryName))
+    lines.push(cells.map(escapeStatementCsvCell).join(","));
 
   download(
     new Blob(["\uFEFF" + lines.join("\n")], { type: "text/csv;charset=utf-8" }),

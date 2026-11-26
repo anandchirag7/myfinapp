@@ -8,19 +8,33 @@
  *   realtime updates on `statement_uploads`.
  */
 
-import { normalizePattern } from "./statement-normalize";
+import { normalizePattern, withConcurrency } from "./statement-normalize";
 import { extractRowsFromAOA, parsePdfWithAI, type ExtractedTxn } from "./statement-parse.server";
 import { resolveFromLookups, type ResolvedMap } from "./statement-classify.server";
 import { lookupPatternCategories } from "./pattern-categories.functions";
 import { buildCategoryIndex, resolveCategoryId } from "./category-resolver";
 import {
+  auditBalanceContinuity,
   extractLedgerControls,
   reconcileLedger,
   type LedgerControlTotals,
   type LedgerReconciliation,
 } from "./statement-ledger";
+import { resolveEconomicType, type EconomicResolution } from "./statement-economic-resolver";
+import type { HdfcNarration } from "./hdfc-narration";
+import type { EconomicType } from "./statement-domain";
+import { statementSourceFingerprint } from "./statement-source-fingerprint";
+import { detectRecurringCandidates } from "./statement-recurring";
+import type { RecurringCandidate } from "./statement-recurring";
+import { resolveFinancialIdentity, type FinancialIdentity } from "./financial-entities";
+import {
+  applyEconomicCorrection,
+  economicCorrectionKey,
+  type EconomicCorrectionRule,
+} from "./statement-corrections";
 import {
   linkReversalGroups,
+  linkExactReferenceOpposites,
   parseNarrationFingerprint,
   transactionTypeForFingerprint,
   type NarrationFingerprint,
@@ -37,6 +51,16 @@ import {
 export type PipelineTxn = ExtractedTxn & {
   pattern: string;
   fingerprint: NarrationFingerprint;
+  structuredNarration: HdfcNarration;
+  economicType: EconomicType;
+  economicResolution: EconomicResolution;
+  sourceFingerprint: string;
+  originalReference?: string | null;
+  recurringCandidateKey?: string;
+  recurringCandidate?: RecurringCandidate;
+  financialIdentity: FinancialIdentity;
+  canonicalEntityId?: string | null;
+  processorEntityId?: string | null;
   reversal_group_id?: string;
   transfer_account_id?: string | null;
 };
@@ -83,7 +107,8 @@ async function parseFile(
       const aoa = XLSX.utils.sheet_to_json(wb.Sheets[name]!, {
         header: 1,
         raw: true,
-        blankrows: false,
+        // Preserve physical worksheet row numbers for immutable audit lineage.
+        blankrows: true,
       }) as any[][];
       const rows = extractRowsFromAOA(aoa);
       if (rows.length) return { transactions: rows, controls: extractLedgerControls(aoa) };
@@ -98,7 +123,7 @@ async function parseFile(
     const aoa = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]!]!, {
       header: 1,
       raw: true,
-      blankrows: false,
+      blankrows: true,
     }) as any[][];
     return { transactions: extractRowsFromAOA(aoa), controls: extractLedgerControls(aoa) };
   }
@@ -135,6 +160,8 @@ export type UploadResult = {
   classificationStatus: "queued" | "complete" | "partial" | "failed";
   classificationError: string | null;
   ledger: LedgerReconciliation;
+  balanceContinuity: ReturnType<typeof auditBalanceContinuity>;
+  recurringCandidates: RecurringCandidate[];
   archived: boolean;
 };
 
@@ -216,6 +243,16 @@ export async function runStatementUpload(opts: {
     const extracted = parsed.transactions;
     if (!extracted.length) throw new Error("No transactions found in this file.");
     const ledger = reconcileLedger(extracted, parsed.controls);
+    const balanceContinuity = auditBalanceContinuity(extracted);
+    if (balanceContinuity.issues.length) {
+      const sample = balanceContinuity.issues
+        .slice(0, 8)
+        .map((issue) => `row ${issue.sourceRowNumber} (delta ${issue.delta.toFixed(2)})`)
+        .join(", ");
+      throw new Error(
+        `Statement running-balance validation failed at ${sample}${balanceContinuity.issues.length > 8 ? ` and ${balanceContinuity.issues.length - 8} more rows` : ""}. Nothing was imported.`,
+      );
+    }
     if (parsed.controls && !ledger.reconciled) {
       throw new Error(`Statement ledger validation failed: ${ledger.errors.join("; ")}`);
     }
@@ -225,12 +262,18 @@ export async function runStatementUpload(opts: {
       .update({ status: "deduplicating", total_transactions: extracted.length })
       .eq("id", uploadId);
 
-    const [{ data: profile }, { data: spendingProfileRow }] = await Promise.all([
+    const [{ data: profile }, { data: spendingProfileRow }, { data: statementAccount }] = await Promise.all([
       supabase.from("profiles").select("display_name").eq("id", userId).maybeSingle(),
       supabase
         .from("household_ai_spending_profiles")
         .select("profile")
         .eq("household_id", householdId)
+        .maybeSingle(),
+      supabase
+        .from("accounts")
+        .select("category")
+        .eq("household_id", householdId)
+        .eq("id", input.accountId)
         .maybeSingle(),
     ]);
     const spendingProfile = normalizeAiSpendingProfile(spendingProfileRow?.profile);
@@ -244,27 +287,116 @@ export async function runStatementUpload(opts: {
     );
 
     // Normalize + dedupe
-    const transactions: PipelineTxn[] = await Promise.all(
-      extracted.map(async (t) => {
+    const transactions: PipelineTxn[] = await withConcurrency(
+      extracted,
+      32,
+      async (t) => {
         const pattern = normalizePattern(t.description);
+        const direction = t.direction ?? (t.type === "income" ? "credit" : "debit");
+        const economicResolution = resolveEconomicType({
+          description: t.description,
+          direction,
+          amount: t.amount,
+          accountCategory: statementAccount?.category ?? null,
+        });
         return {
           ...t,
           pattern,
+          structuredNarration: economicResolution.narration,
+          economicType: economicResolution.economicType,
+          economicResolution,
+          financialIdentity: resolveFinancialIdentity(t.description, economicResolution.narration),
+          sourceFingerprint: await statementSourceFingerprint(t),
+          originalReference: economicResolution.narration.originalReference,
           fingerprint: await parseNarrationFingerprint({
             raw: t.description,
-            direction: t.type === "income" ? "credit" : "debit",
+            direction,
             bankFormat: input.bank,
             scopeSalt: householdId,
             normalizedPattern: pattern,
             accountHolderTokens,
           }),
         };
-      }),
+      },
     );
     for (const transaction of transactions) {
       transaction.type = transactionTypeForFingerprint(transaction.fingerprint);
     }
+    linkExactReferenceOpposites(transactions);
     linkReversalGroups(transactions);
+    const reversalGroups = new Map<string, PipelineTxn[]>();
+    for (const transaction of transactions) {
+      if (!transaction.reversal_group_id) continue;
+      const members = reversalGroups.get(transaction.reversal_group_id) ?? [];
+      members.push(transaction);
+      reversalGroups.set(transaction.reversal_group_id, members);
+    }
+    for (const members of reversalGroups.values()) {
+      if (!members.some((transaction) => transaction.economicType === "REVERSAL" || transaction.reversal_group_id?.startsWith("reversal:reference:"))) continue;
+      for (const transaction of members) {
+        transaction.economicType = "REVERSAL";
+        transaction.economicResolution = {
+          ...transaction.economicResolution,
+          economicType: "REVERSAL",
+          confidence: 1,
+          source: "deterministic",
+          ruleId: "exact-reference-reversal-pair",
+          reasons: ["An equal debit and credit share the same exact bank reference."],
+          requiresReview: false,
+        };
+      }
+    }
+    const recurringCandidates = detectRecurringCandidates(
+      transactions.map((transaction, index) => ({
+        key: String(index),
+        date: transaction.date,
+        amount: transaction.amount,
+        direction: transaction.direction ?? transaction.fingerprint.direction,
+        providerKey:
+          transaction.structuredNarration.counterparty ??
+          transaction.fingerprint.counterpartyKey ??
+          transaction.pattern,
+        mandateReference: transaction.structuredNarration.mandateReference,
+      })),
+    );
+    for (const candidate of recurringCandidates) {
+      for (const key of candidate.observationKeys) {
+        const transaction = transactions[Number(key)];
+        if (transaction) {
+          transaction.recurringCandidateKey = candidate.key;
+          transaction.recurringCandidate = candidate;
+        }
+      }
+    }
+
+    const entityNames = Array.from(
+      new Set(
+        transactions.flatMap((transaction) =>
+          [transaction.financialIdentity.canonicalName, transaction.financialIdentity.processorName].filter(
+            (name): name is string => !!name,
+          ),
+        ),
+      ),
+    );
+    if (entityNames.length) {
+      const { data: entityRows } = await supabase
+        .from("merchant_entities")
+        .select("id,canonical_name")
+        .in("canonical_name", entityNames);
+      const entityIdByName = new Map<string, string>(
+        (entityRows ?? []).map(
+          (entity: any): [string, string] => [String(entity.canonical_name), String(entity.id)],
+        ),
+      );
+      for (const transaction of transactions) {
+        transaction.canonicalEntityId = transaction.financialIdentity.canonicalName
+          ? (entityIdByName.get(transaction.financialIdentity.canonicalName) ?? null)
+          : null;
+        transaction.processorEntityId = transaction.financialIdentity.processorName
+          ? (entityIdByName.get(transaction.financialIdentity.processorName) ?? null)
+          : null;
+      }
+    }
 
     const groups = new Map<string, PendingPattern>();
     for (const t of transactions) {
@@ -286,7 +418,13 @@ export async function runStatementUpload(opts: {
     const patterns = Array.from(groups.keys());
 
     // Fetch categories + payees BEFORE resolve (need CategoryIndex for enrichment)
-    const [{ data: cats }, { data: payeeRows }, { data: transferMemory }] = await Promise.all([
+    const [
+      { data: cats },
+      { data: payeeRows },
+      { data: transferMemory },
+      { data: accountAliasRows },
+      { data: economicRuleRows },
+    ] = await Promise.all([
       supabase
         .from("categories")
         .select("id, name, kind, parent_id")
@@ -300,6 +438,18 @@ export async function runStatementUpload(opts: {
         .select("normalized_pattern,direction,counterparty_account_id")
         .eq("household_id", householdId)
         .eq("statement_account_id", input.accountId)
+        .in("normalized_pattern", patterns),
+      (supabase as any)
+        .from("account_aliases")
+        .select("normalized_alias,account_id")
+        .eq("household_id", householdId)
+        .eq("alias_type", "narration")
+        .eq("verified", true)
+        .in("normalized_alias", patterns),
+      (supabase as any)
+        .from("statement_economic_rules")
+        .select("normalized_pattern,direction,economic_type")
+        .eq("household_id", householdId)
         .in("normalized_pattern", patterns),
     ]);
     const categories = (cats ?? []) as Array<{
@@ -316,13 +466,57 @@ export async function runStatementUpload(opts: {
         String(row.counterparty_account_id),
       ]),
     );
+    const accountAliasMap = new Map<string, string>(
+      (accountAliasRows ?? []).map((row: any) => [
+        String(row.normalized_alias),
+        String(row.account_id),
+      ]),
+    );
+    const economicRuleMap = new Map<string, EconomicCorrectionRule>(
+      (economicRuleRows ?? []).map(
+        (row: any): [string, EconomicCorrectionRule] => [
+          economicCorrectionKey(String(row.normalized_pattern), row.direction),
+          {
+            normalizedPattern: String(row.normalized_pattern),
+            direction: row.direction as "debit" | "credit",
+            economicType: row.economic_type as EconomicType,
+          },
+        ],
+      ),
+    );
     for (const transaction of transactions) {
-      const remembered = rememberedTransferAccount.get(
-        `${transaction.pattern}\u0000${transaction.fingerprint.direction}`,
-      );
+      const direction = transaction.direction ?? transaction.fingerprint.direction;
+      const correction = economicRuleMap.get(economicCorrectionKey(transaction.pattern, direction));
+      if (
+        correction &&
+        (transaction.economicResolution.requiresReview ||
+          transaction.economicResolution.source === "direction_fallback" ||
+          transaction.economicResolution.source === "unresolved")
+      ) {
+        transaction.economicResolution = applyEconomicCorrection(
+          transaction.economicResolution,
+          correction,
+        );
+        transaction.economicType = transaction.economicResolution.economicType;
+      }
+      const remembered =
+        rememberedTransferAccount.get(
+          `${transaction.pattern}\u0000${transaction.fingerprint.direction}`,
+        ) ??
+        (transaction.fingerprint.counterpartyKind === "self" &&
+        transaction.fingerprint.eventType === "transfer"
+          ? accountAliasMap.get(transaction.pattern)
+          : undefined);
       if (remembered) {
         transaction.type = "transfer";
         transaction.transfer_account_id = remembered;
+        transaction.economicResolution = resolveEconomicType({
+          description: transaction.description,
+          direction: transaction.direction ?? transaction.fingerprint.direction,
+          amount: transaction.amount,
+          isKnownInternalTransfer: true,
+        });
+        transaction.economicType = "INTERNAL_TRANSFER";
       }
     }
     const profileResolved = applyAiSpendingProfileMappings(
@@ -406,6 +600,8 @@ export async function runStatementUpload(opts: {
           resolved,
           pending: pending.map((p) => p.pattern),
           ledger,
+          balanceContinuity,
+          recurringCandidates,
         },
       })
       .eq("id", uploadId);
@@ -509,6 +705,8 @@ export async function runStatementUpload(opts: {
               classification: classified.diagnostics,
               rollout,
               ledger,
+              balanceContinuity,
+              recurringCandidates,
             },
           })
           .eq("id", uploadId);
@@ -525,6 +723,8 @@ export async function runStatementUpload(opts: {
               resolved,
               pending: pending.map((item) => item.pattern),
               ledger,
+              balanceContinuity,
+              recurringCandidates,
             },
           })
           .eq("id", uploadId);
@@ -575,6 +775,8 @@ export async function runStatementUpload(opts: {
       classificationStatus,
       classificationError,
       ledger,
+      balanceContinuity,
+      recurringCandidates,
     };
   } catch (e: any) {
     await fail(e?.message ?? "Statement processing failed");

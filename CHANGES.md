@@ -2,6 +2,102 @@
 
 This file tracks all modified and newly created files along with their date of change.
 
+## 2026-10-04
+
+- Replaced blocking statement-import questions with an optional top-priority preview and a persistent Settings review inbox; all valid statement rows can now be saved before cleanup questions are answered.
+- Added generic card-payment allocation and reconciliation for any number of owned bank and credit-card accounts, including reference/account/amount/date matching, ambiguity safeguards, provisional counter-postings, reverse import order, and exact split-allocation domain support.
+- Added `credit_card_payment_allocations` with household RLS, indexes, validation, and an atomic `resolve_statement_card_payment` RPC so later card-statement credits become evidence for provisional payments instead of duplicate ledger entries.
+- Added grouped review persistence during import and server-side inbox answers that update every affected transaction, convert deferred card debits to owned-account transfers, update allocations, and recompute both account balances.
+- Corrected import completion counts to report every physical statement row imported separately from canonical ledger entries created, reconciled legs, exclusions, and deferred review groups.
+- Added account-aware recognition for “payment received” credits on credit-card statements without applying that interpretation to savings-account credits.
+- Added six multi-account/card reconciliation regressions covering five cards paid from one savings account, ambiguity, reference priority, split allocation, one-time target consumption, and non-blocking grouped review; the suite now passes 166 tests and the production build succeeds.
+- `src/lib/statement-account-reconciliation.ts`
+- `src/lib/statement-review.functions.ts`
+- `src/components/statement-review-inbox.tsx`
+- `supabase/migrations/20261005000000_multi_account_card_reconciliation.sql`
+- `src/tests/statement-account-reconciliation.test.ts`
+- Fixed final statement-save validation for sparse Excel rows by normalizing missing and non-finite worksheet cells to JSON-safe `null` values in the parser, request payload, and server validator.
+- Added regression coverage reproducing `transactions[0].raw_cells[*]` rejecting `undefined` values.
+- Made failed imports and user-triggered undo remove orphan financial-event headers, statement evidence, and raw statement rows as well as normalized transactions.
+- Added parsed/submitted/inserted/reconciled/excluded/duplicate counts so import completion explains every statement row.
+- Added an explicit PostgREST schema-cache refresh to the financial-event migration.
+- Added household-scoped economic correction rules and audit records with transaction-only, future, and existing-plus-future scopes; future is the safe default.
+- `src/lib/statement-corrections.ts`
+- Audited statement parsing, categorization, duplicate handling, internal transfers, recurring models, persistence, reporting semantics, scale limits, and RLS against the requested HDFC financial-event architecture.
+- Added the phased implementation plan, schema strategy, resolver order, test gates, 24 acceptance criteria, security/performance checks, and rollout/rollback design.
+- `HDFC_FINANCIAL_EVENT_IMPORT_IMPLEMENTATION_PLAN.md`
+- Added red-first regression coverage for economic impact semantics, lossless HDFC row extraction, balance continuity, and structured UPI/UPIRET/ACH/IMPS/NEFT parsing.
+- `src/tests/statement-financial-events.test.ts`
+- `src/tests/test-runner.ts`
+- Added the economic-type vocabulary and centralized spending/income/cash-flow impact semantics without replacing the legacy transaction enum.
+- Added a structured HDFC narration parser for UPI, UPIRET, ACH/NACH/ECS, IMPS, NEFT/RTGS, cash, and fee evidence.
+- Preserved statement direction, value date, bank reference, debit, credit, closing balance, source row, and raw cells during spreadsheet extraction.
+- Added row-level closing-balance continuity diagnostics that identify the exact source row and delta.
+- `src/lib/statement-domain.ts`
+- `src/lib/hdfc-narration.ts`
+- `src/lib/statement-parse.server.ts`
+- `src/lib/statement-ledger.ts`
+- Added red-first coverage for protected economic resolvers and contextual ₹1 verification detection.
+- Added deterministic, explainable economic classification for card payments, investments, settlements, loans, insurance, refunds/reversals, income, cash, fees/tax, and guarded unknown credits.
+- Wired structured HDFC narration, economic type/confidence/reasons, and balance-continuity diagnostics into the live statement upload response and persisted upload result.
+- `src/lib/statement-economic-resolver.ts`
+- `src/lib/statement-pipeline.server.ts`
+- Added the household-scoped raw evidence, financial event/link, account alias, recurring mandate, transaction match, and grouped review schema with RLS, grants, constraints, and query indexes.
+- Extended transactions with economic meaning, direction, source lineage, entity/processor, mandate, event, confidence, explanation, fingerprint, and interpretation version fields, including a conservative historical backfill.
+- `supabase/migrations/20261004000000_financial_event_architecture.sql`
+- Added deterministic source-row fingerprints using source row, dates, reference, direction, amounts, closing balance, and narration.
+- Propagated economic interpretation and immutable raw evidence from the server pipeline through clustering and review into the save request.
+- `src/lib/statement-source-fingerprint.ts`
+- `src/lib/statement-clusters.ts`
+- `src/components/statement-import/review/types.ts`
+- `src/components/statement-import-dialog.tsx`
+- Persisted immutable raw HDFC rows in bounded chunks before normalized postings, linked normal transactions to their raw row, and included rollback cleanup and retry-safe conflict handling.
+- Extended the insert allowlist to persist economic type, direction, value/reference, rail, confidence, reasons, fingerprint, and interpretation version while still stripping UI-only row keys.
+- Ensured confirmed internal transfers receive protected economic semantics.
+- `src/lib/statement-import.functions.ts`
+- `src/lib/statement-transfers.ts`
+- `src/tests/statement-transfers.test.ts`
+- Preserved the full raw narration separately from the legacy 500-character transaction note and added fingerprint collision regression coverage.
+- Prioritized exact normalized bank-reference matching for UPI returns before amount/counterparty fallback, with one-to-one consumption.
+- Added database triggers that create and synchronize an auditable financial event for each new normalized posting.
+- Switched dashboard cash-flow and category-spend aggregation to economic semantics, excluding transfers, card payments, investments, loans, cash moves, settlements, reversals, and verification rows while netting refunds.
+- Hardened dashboard RPCs with invoker rights, household access validation, and bounded result limits.
+- `src/lib/finance.functions.ts`
+- Added recurring-mandate detection keyed by provider plus mandate reference (or amount fallback), with cadence, expected amount/day, tolerance, date window, and confidence.
+- Wired recurring candidates into upload diagnostics and covered multiple same-provider mandates including the RACPC ₹32,569 case.
+- `src/lib/statement-recurring.ts`
+- Added grouped, blocking import questions for unknown credits and destination credit-card accounts, applying one answer to every matching row.
+- Credit-card payments now create a linked transfer-style posting for balance accuracy while retaining `CREDIT_CARD_PAYMENT` economic semantics, and affected target balances are recomputed.
+- Expanded transaction detail with raw statement evidence, economic meaning, confidence, and resolver reasons.
+- `src/components/statement-import/review-step.tsx`
+- `src/components/statement-import/review/toolbar.tsx`
+- `src/components/statement-import/review/detail-drawer.tsx`
+- Replaced client-estimated success counts with server-confirmed processed, inserted, reconciled-transfer, raw-evidence, and duplicate/excluded counts.
+- Added exact-reference, equal-amount, opposite-direction pairing for silent HDFC ACH returns and normalized both members as a neutral reversal event.
+- Preserved blank worksheet rows during Excel/CSV parsing so `sourceRowNumber` points to the physical HDFC sheet row (23–594 in the repository fixture), not a compacted array position.
+- Updated household/account reset flows to remove raw statement evidence, event links/events, matches, grouped reviews, transfer evidence, and observed mandates without leaving orphan financial records.
+- `src/lib/data-reset.functions.ts`
+- Updated generated transaction typings for the new financial-event, evidence, entity, mandate, confidence, and statement columns.
+- `src/integrations/supabase/types.ts`
+- Bounded server-side upload filename, MIME, and base64 sizes and neutralized spreadsheet formula prefixes in statement CSV exports.
+- `src/lib/statement-pipeline.functions.ts`
+- `src/lib/statement-export.ts`
+- Added deterministic financial identity/family resolution that keeps Zerodha/ICCL, INDmoney/Finzoomers, CRED, RACPC, and insurers distinct from processors such as Razorpay/PayU.
+- Wired canonical and processor entity IDs into live pipeline transactions.
+- `src/lib/financial-entities.ts`
+- Added a global verified financial-entity seed set and explicit family/servicer relationships, with RLS-protected household extensions.
+- Persisted canonical counterparty and processor entity IDs independently on normalized transactions.
+- Persisted detected recurring mandates once per provider/reference/amount identity and linked all observed postings, with rollback cleanup for newly created mandate rows.
+- Learned verified account aliases whenever the user confirms an internal-transfer destination, complementing the existing directional transfer memory.
+- Reused verified account aliases in subsequent imports only when narration evidence independently identifies a self-transfer.
+- Projected report transactions through the economic model while retaining original cash type/amount, preventing investments, card payments, settlements, reversals, loans, and cash moves from inflating income or spending and netting refunds.
+- `src/lib/reports-fetch.ts`
+- Bounded narration hashing/parsing concurrency to avoid a 100k-row `Promise.all` memory spike and made running-balance discontinuities fail with exact physical row/delta diagnostics.
+- Added repeatable 1k/10k/100k statement extraction, economic-resolution, and fingerprint benchmarks with row-loss assertions and memory/timing output.
+- `scripts/benchmark-statement-import.ts`
+- `package.json`
+- Recorded implementation status, real-HDFC reconciliation evidence, and actual 1k/10k/100k benchmark results in the architecture plan.
+
 ## 2026-10-03
 
 - Fixed statement imports sending import-only `statement_direction` and `statement_row_key` fields to the `transactions` table; persistence now uses an explicit allowlist for database columns, including EMI parent and child rows.

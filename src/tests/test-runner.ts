@@ -22,6 +22,8 @@ import { registerTransactionEditTests } from "./transaction-edit.test";
 import { registerStatementCategorizationRemediationTests } from "./statement-categorization-remediation.test";
 import { registerAiSpendingProfileTests } from "./ai-spending-profile.test";
 import { registerStatementTransferTests } from "./statement-transfers.test";
+import { registerStatementFinancialEventTests } from "./statement-financial-events.test";
+import { registerStatementAccountReconciliationTests } from "./statement-account-reconciliation.test";
 
 async function main() {
   console.log("\n🧪 Running Paisa Regression & Verification Test Suite (Phase 4)\n");
@@ -46,6 +48,8 @@ async function main() {
   registerStatementCategorizationRemediationTests();
   registerAiSpendingProfileTests();
   registerStatementTransferTests();
+  registerStatementFinancialEventTests();
+  registerStatementAccountReconciliationTests();
 
   const summary = await runTests();
 

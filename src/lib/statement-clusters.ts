@@ -10,6 +10,8 @@
 import { titleCase, normalizePattern } from "./statement-normalize";
 import { resolveCategoryId, categorizeByKeywords, type CategoryIndex } from "./category-resolver";
 import { semanticMergeAllowed, type NarrationFingerprint } from "./statement-fingerprint";
+import type { EconomicType } from "./statement-domain";
+import type { RecurringCandidate } from "./statement-recurring";
 
 export type MatchSource =
   "alias" | "payee" | "rule" | "dictionary" | "cluster" | "ai" | "manual" | "pending";
@@ -26,6 +28,23 @@ export type ClusterTxn = {
   fingerprint?: NarrationFingerprint;
   reversal_group_id?: string;
   transfer_account_id?: string | null;
+  economicType?: EconomicType;
+  economicConfidence?: number;
+  economicSource?: string;
+  economicReasons?: string[];
+  sourceFingerprint?: string;
+  sourceRowNumber?: number;
+  valueDate?: string | null;
+  reference?: string | null;
+  debit?: number | null;
+  credit?: number | null;
+  closingBalance?: number | null;
+  rawCells?: Array<string | number | boolean | null>;
+  paymentRail?: string;
+  originalReference?: string | null;
+  canonicalEntityId?: string | null;
+  processorEntityId?: string | null;
+  recurringCandidate?: RecurringCandidate;
 };
 
 export type Member = {

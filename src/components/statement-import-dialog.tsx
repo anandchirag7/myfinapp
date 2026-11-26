@@ -489,6 +489,23 @@ export function StatementImportDialog({
         pattern: t.pattern || "MISC",
         fingerprint: t.fingerprint,
         reversal_group_id: t.reversal_group_id,
+        economicType: t.economicType,
+        economicConfidence: t.economicResolution?.confidence,
+        economicSource: t.economicResolution?.source,
+        economicReasons: t.economicResolution?.reasons,
+        sourceFingerprint: t.sourceFingerprint,
+        sourceRowNumber: t.sourceRowNumber,
+        valueDate: t.valueDate,
+        reference: t.reference,
+        debit: t.debit,
+        credit: t.credit,
+        closingBalance: t.closingBalance,
+        rawCells: t.rawCells,
+        paymentRail: t.structuredNarration?.rail,
+        originalReference: t.structuredNarration?.originalReference,
+        canonicalEntityId: t.canonicalEntityId,
+        processorEntityId: t.processorEntityId,
+        recurringCandidate: t.recurringCandidate,
       }));
       setRawTxns(txns);
       await sleep(120);
@@ -821,6 +838,22 @@ export function StatementImportDialog({
         transfer_account_id: c?.transfer_account_id ?? null,
         statement_direction:
           t.fingerprint?.direction ?? ((c?.type ?? t.type) === "income" ? "credit" : "debit"),
+        economic_type: t.economicType,
+        economic_confidence: t.economicConfidence,
+        economic_source: t.economicSource,
+        economic_reasons: t.economicReasons,
+        source_fingerprint: t.sourceFingerprint,
+        source_row_number: t.sourceRowNumber,
+        value_date: t.valueDate,
+        original_reference: t.originalReference ?? t.reference,
+        debit: t.debit,
+        credit: t.credit,
+        closing_balance: t.closingBalance,
+        raw_cells: t.rawCells,
+        payment_rail: t.paymentRail,
+        canonical_entity_id: t.canonicalEntityId,
+        processor_entity_id: t.processorEntityId,
+        recurring_candidate: t.recurringCandidate,
         source: c?.pendingAi ? "pending" : (c?.source ?? "cluster"),
         confidence: c?.confidence ?? 0.5,
         include: !ignored,
@@ -1060,6 +1093,7 @@ export function StatementImportDialog({
       detail: "This import is idempotent — cancelling or retrying can never double-insert.",
     });
     try {
+      const excludedRows = finalRows.filter((row) => !row.include);
       const active = clusters.filter((c) => c.status !== "ignored");
       const newPayees = active
         .filter((c) => !c.isExisting && c.name.trim() && (c.saveAsPayee || c.status === "approved"))
@@ -1081,6 +1115,12 @@ export function StatementImportDialog({
           payeeAliases,
           importToken: importToken ?? undefined,
           uploadId: uploadId ?? undefined,
+          sourceSummary: {
+            parsed: finalRows.length,
+            included: toSave.length,
+            excluded: excludedRows.length,
+            duplicatesExcluded: excludedRows.filter((row) => row.duplicate).length,
+          },
           transactions: toSave.map((r) => ({
             txn_date: r.date,
             amount: Number(r.amount),
@@ -1088,10 +1128,28 @@ export function StatementImportDialog({
             category_id: r.category_id,
             merchant: r.payee || null,
             note: r.description.slice(0, 500),
+            raw_narration: r.description.slice(0, 4000),
             transfer_account_id: r.transfer_account_id ?? null,
             statement_direction: r.statement_direction,
             normalized_pattern: r.pattern.slice(0, 240),
             statement_row_key: r.key.slice(0, 200),
+            economic_type: r.economic_type,
+            classification_confidence: r.economic_confidence,
+            classification_source: r.economic_source,
+            classification_reasons: r.economic_reasons,
+            source_fingerprint: r.source_fingerprint,
+            source_row_number: r.source_row_number,
+            value_date: r.value_date,
+            original_reference: r.original_reference,
+            debit: r.debit,
+            credit: r.credit,
+            closing_balance: r.closing_balance,
+            raw_cells: Array.from(r.raw_cells ?? [], (cell) => cell ?? null),
+            payment_rail: r.payment_rail,
+            canonical_entity_id: r.canonical_entity_id,
+            processor_entity_id: r.processor_entity_id,
+            recurring_candidate: r.recurring_candidate,
+            economic_correction_scope: r.economic_correction_scope,
           })),
         },
         signal: controller.signal,
@@ -1125,9 +1183,32 @@ export function StatementImportDialog({
       const batchId = (res?.batchId as string) ?? importToken ?? null;
       const snapshot = toSave;
       const meta = exportMeta("imported", snapshot);
-      if (batchId) setLastBatch({ batchId, count: snapshot.length });
+      const insertedCount = Number(res?.inserted ?? 0);
+      const reconciledCount = Number(res?.reconciledTransfers ?? 0) + Number(res?.reconciledCardPayments ?? 0);
+      const ledgerEntriesCreated = Number(res?.ledgerEntriesCreated ?? insertedCount);
+      const reviewItemsCreated = Number(res?.reviewItemsCreated ?? 0);
+      const processedCount = Number(res?.processed ?? insertedCount + reconciledCount);
+      const submittedCount = Number(res?.submitted ?? insertedCount + reconciledCount);
+      const excludedCount = Number(res?.excluded ?? 0);
+      const duplicatesSkipped = Number(res?.duplicatesSkipped ?? 0);
+      const correctionsLearned = Number(res?.correctionsLearned ?? 0);
+      const existingCorrectionsApplied = Number(res?.existingCorrectionsApplied ?? 0);
+      const rawEvidenceCount = Number(res?.rawEvidenceSaved ?? 0);
+      if (batchId) setLastBatch({ batchId, count: insertedCount });
+      const completionSummary =
+        `Analyzed ${processedCount.toLocaleString()} transactions: ${insertedCount.toLocaleString()} imported` +
+        (reconciledCount
+          ? `, ${reconciledCount.toLocaleString()} transfers reconciled`
+          : "") +
+        (excludedCount
+          ? `, ${excludedCount.toLocaleString()} excluded (${duplicatesSkipped.toLocaleString()} duplicates)`
+          : "") +
+        (reviewItemsCreated
+          ? ` · ${reviewItemsCreated.toLocaleString()} grouped review item${reviewItemsCreated === 1 ? "" : "s"} saved for later`
+          : "") +
+        (newPayees.length ? ` · ${newPayees.length} new payees saved` : "");
       toast.success(
-        `Imported ${snapshot.length.toLocaleString()} transactions${newPayees.length ? ` · ${newPayees.length} new payees saved` : ""}`,
+        completionSummary,
         {
           duration: 15000,
           description: batchId ? "Something wrong? You can roll this import back." : undefined,
@@ -1141,10 +1222,20 @@ export function StatementImportDialog({
         description: `${meta.fileName} · ${meta.from} → ${meta.to}`,
         action: { label: "Download CSV", onClick: () => doExport("csv", "imported", snapshot) },
       });
-      notify("imported", true, `Imported ${snapshot.length.toLocaleString()} transactions`, [
+      if (res?.correctionWarning) toast.warning(String(res.correctionWarning));
+      notify("imported", true, `Analyzed ${processedCount.toLocaleString()} transactions`, [
         `File: ${meta.fileName}`,
         `Account: ${meta.account} (${meta.bank})`,
         `Period: ${meta.from} → ${meta.to}`,
+        `Statement rows imported: ${insertedCount.toLocaleString()}`,
+        `Ledger entries created: ${ledgerEntriesCreated.toLocaleString()}`,
+        `Submitted after review: ${submittedCount.toLocaleString()}`,
+        `Transfers reconciled: ${reconciledCount.toLocaleString()}`,
+        `Excluded: ${excludedCount.toLocaleString()} (${duplicatesSkipped.toLocaleString()} duplicates)`,
+        `Future correction rules learned: ${correctionsLearned.toLocaleString()}`,
+        `Existing rows corrected: ${existingCorrectionsApplied.toLocaleString()}`,
+        `Raw evidence saved: ${rawEvidenceCount.toLocaleString()}`,
+        `Review groups saved for later: ${reviewItemsCreated.toLocaleString()}`,
         `New payees saved: ${newPayees.length}`,
         `Duplicates skipped: ${rows.filter((r) => r.duplicate && !r.include).length}`,
       ]);
@@ -1382,6 +1473,11 @@ export function StatementImportDialog({
             <ReviewStep
               rows={rows}
               categories={categories}
+              accounts={(accounts as any[]).map((account) => ({
+                id: account.id,
+                name: account.name,
+                category: account.category,
+              }))}
               saving={saving}
               onBack={() => setStep("confirm")}
               onSave={requestSave}

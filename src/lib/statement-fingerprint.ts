@@ -109,6 +109,7 @@ function railOf(raw: string): PaymentRail {
 
 function eventOf(raw: string, direction: "debit" | "credit"): StatementEventType {
   const value = raw.toUpperCase();
+  if (/\bUPIRET\b/.test(value)) return "reversal";
   if (/\bSALARY\b/.test(value)) return "salary";
   if (/\b(?:DIVIDEND|DIVIDEND PAYOUT|CORPORATE ACTION|ISIN)\b/.test(value)) return "dividend";
   if (/\bINTEREST\b/.test(value)) return "interest";
@@ -251,10 +252,65 @@ export type ReversalCandidate = {
   pattern: string;
   fingerprint: NarrationFingerprint;
   reversal_group_id?: string;
+  reference?: string | null;
+  originalReference?: string | null;
 };
+
+function comparableReference(value: string | null | undefined): string | null {
+  const normalized = String(value ?? "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "")
+    .replace(/^0+(?=\d)/, "");
+  return normalized.length >= 8 ? normalized : null;
+}
+
+export type ReferenceOppositeCandidate = {
+  date: string;
+  amount: number;
+  type: "income" | "expense" | "transfer";
+  reference?: string | null;
+  reversal_group_id?: string;
+};
+
+/** Exact bank-reference pairs are stronger evidence than narration similarity. */
+export function linkExactReferenceOpposites<T extends ReferenceOppositeCandidate>(
+  transactions: T[],
+): T[] {
+  const byReference = new Map<string, T[]>();
+  for (const transaction of transactions) {
+    const reference = comparableReference(transaction.reference);
+    if (!reference || transaction.type === "transfer") continue;
+    const rows = byReference.get(reference) ?? [];
+    rows.push(transaction);
+    byReference.set(reference, rows);
+  }
+  for (const [reference, rows] of byReference) {
+    const debits = rows.filter((row) => row.type === "expense" && !row.reversal_group_id);
+    const credits = rows.filter((row) => row.type === "income" && !row.reversal_group_id);
+    if (debits.length !== 1 || credits.length !== 1) continue;
+    const debit = debits[0]!;
+    const credit = credits[0]!;
+    if (Math.abs(Math.abs(debit.amount) - Math.abs(credit.amount)) >= 0.005) continue;
+    const dayGap = Math.abs(Date.parse(debit.date) - Date.parse(credit.date)) / 86_400_000;
+    if (dayGap > 7) continue;
+    const groupId = `reversal:reference:${reference}`;
+    debit.reversal_group_id = groupId;
+    credit.reversal_group_id = groupId;
+  }
+  return transactions;
+}
 
 export function linkReversalGroups<T extends ReversalCandidate>(transactions: T[]): T[] {
   const unmatchedDebits = new Map<string, T[]>();
+  const debitByReference = new Map<string, T[]>();
+  for (const transaction of transactions) {
+    if (transaction.type !== "expense") continue;
+    const reference = comparableReference(transaction.reference);
+    if (!reference) continue;
+    const list = debitByReference.get(reference) ?? [];
+    list.push(transaction);
+    debitByReference.set(reference, list);
+  }
   for (const transaction of transactions) {
     const identity = transaction.fingerprint.counterpartyKey ?? transaction.pattern;
     const key = `${identity}\u0000${Math.abs(transaction.amount).toFixed(2)}`;
@@ -265,6 +321,21 @@ export function linkReversalGroups<T extends ReversalCandidate>(transactions: T[
       continue;
     }
     if (!["refund", "reversal"].includes(transaction.fingerprint.eventType)) continue;
+    const originalReference = comparableReference(transaction.originalReference);
+    if (originalReference) {
+      const exact = (debitByReference.get(originalReference) ?? []).filter(
+        (candidate) =>
+          !candidate.reversal_group_id &&
+          Math.abs(Math.abs(candidate.amount) - Math.abs(transaction.amount)) < 0.005,
+      );
+      if (exact.length === 1) {
+        const debit = exact[0]!;
+        const groupId = `reversal:reference:${originalReference}`;
+        debit.reversal_group_id = groupId;
+        transaction.reversal_group_id = groupId;
+        continue;
+      }
+    }
     const debit = (unmatchedDebits.get(key) ?? []).find((candidate) => {
       const days = Math.abs(Date.parse(transaction.date) - Date.parse(candidate.date)) / 86_400_000;
       return days <= 30 && !candidate.reversal_group_id;

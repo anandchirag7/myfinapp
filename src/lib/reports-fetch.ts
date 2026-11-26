@@ -1,4 +1,38 @@
 import { getHouseholdId } from "@/lib/household.server";
+import {
+  economicImpact,
+  economicTypeFromLegacy,
+  isEconomicType,
+} from "@/lib/statement-domain";
+
+export function economicReportProjection(transaction: any) {
+  const direction =
+    transaction.statement_direction === "credit" || transaction.statement_direction === "debit"
+      ? transaction.statement_direction
+      : transaction.type === "income"
+        ? "credit"
+        : "debit";
+  const economicType = isEconomicType(transaction.economic_type)
+    ? transaction.economic_type
+    : economicTypeFromLegacy(transaction.type, direction);
+  const impact = economicImpact(economicType, direction, Number(transaction.amount));
+  const reportingType = impact.income !== 0
+    ? "income"
+    : impact.spending !== 0
+      ? "expense"
+      : economicType === "INTERNAL_TRANSFER"
+        ? "transfer"
+        : economicType.toLowerCase();
+  const reportingAmount = impact.income || impact.spending || Number(transaction.amount);
+  return {
+    ...transaction,
+    cash_type: transaction.type,
+    cash_amount: Number(transaction.amount),
+    type: reportingType,
+    amount: reportingAmount,
+    economic_type: economicType,
+  };
+}
 
 // Shared, plain (non-server-fn) helper used by both getReportsData and the
 // server-side export job. Takes an authenticated Supabase client + user id.
@@ -61,7 +95,7 @@ export async function fetchReportsData(
     profile: profileRes.data ?? null,
     accounts: accountsRes.data ?? [],
     categories: categoriesRes.data ?? [],
-    transactions: txnsRes.data ?? [],
+    transactions: (txnsRes.data ?? []).map(economicReportProjection),
     bills: billsRes.data ?? [],
     billPayments: billPaymentsRes.data ?? [],
     budgets: budgetsRes.data ?? [],

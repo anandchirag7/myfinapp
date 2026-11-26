@@ -18,11 +18,13 @@ export function registerStatementReleaseBTests() {
       const aoa = XLSX.utils.sheet_to_json(sheet, {
         header: 1,
         raw: true,
-        blankrows: false,
+        blankrows: true,
       }) as unknown[][];
       const transactions = extractRowsFromAOA(aoa);
       const result = reconcileLedger(transactions, extractLedgerControls(aoa));
       expect(transactions.length).toBe(572);
+      expect(transactions[0]?.sourceRowNumber).toBe(23);
+      expect(transactions.at(-1)?.sourceRowNumber).toBe(594);
       expect(result.parsedDebitCount).toBe(506);
       expect(result.parsedCreditCount).toBe(66);
       expect(result.debitDelta).toBe(0);

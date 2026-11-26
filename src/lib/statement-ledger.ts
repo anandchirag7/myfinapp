@@ -12,6 +12,26 @@ export type LedgerTransaction = {
   type: "income" | "expense" | "transfer";
 };
 
+export type BalanceContinuityRow = LedgerTransaction & {
+  debit?: number | null;
+  credit?: number | null;
+  closingBalance?: number | null;
+  sourceRowNumber?: number;
+};
+
+export type BalanceContinuityIssue = {
+  sourceRowNumber: number;
+  previousClosingBalance: number;
+  expectedClosingBalance: number;
+  actualClosingBalance: number;
+  delta: number;
+};
+
+export type BalanceContinuityAudit = {
+  checkedTransitions: number;
+  issues: BalanceContinuityIssue[];
+};
+
 export type LedgerReconciliation = LedgerControlTotals & {
   parsedDebitTotal: number;
   parsedCreditTotal: number;
@@ -25,6 +45,35 @@ export type LedgerReconciliation = LedgerControlTotals & {
 };
 
 const money = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
+
+/** Checks each running balance against the immediately preceding parsed row. */
+export function auditBalanceContinuity(
+  rows: BalanceContinuityRow[],
+  tolerance = 0.005,
+): BalanceContinuityAudit {
+  const issues: BalanceContinuityIssue[] = [];
+  let checkedTransitions = 0;
+  for (let index = 1; index < rows.length; index += 1) {
+    const previous = rows[index - 1]!;
+    const current = rows[index]!;
+    if (previous.closingBalance == null || current.closingBalance == null) continue;
+    const debit = current.debit ?? (current.type === "expense" ? current.amount : 0);
+    const credit = current.credit ?? (current.type === "income" ? current.amount : 0);
+    const expected = money(previous.closingBalance - Math.abs(debit || 0) + Math.abs(credit || 0));
+    const actual = money(current.closingBalance);
+    const delta = money(actual - expected);
+    checkedTransitions += 1;
+    if (Math.abs(delta) <= tolerance) continue;
+    issues.push({
+      sourceRowNumber: current.sourceRowNumber ?? index + 1,
+      previousClosingBalance: money(previous.closingBalance),
+      expectedClosingBalance: expected,
+      actualClosingBalance: actual,
+      delta,
+    });
+  }
+  return { checkedTransitions, issues };
+}
 
 function numeric(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;

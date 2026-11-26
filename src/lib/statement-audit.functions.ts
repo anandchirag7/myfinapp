@@ -118,18 +118,43 @@ export const undoImportBatch = createServerFn({ method: "POST" })
 
     const { data: rows, error: readErr } = await context.supabase
       .from("transactions")
-      .select("id, account_id")
+      .select("id, account_id, financial_event_id")
       .eq("household_id", householdId)
       .eq("import_batch_id", batchId);
     if (readErr) throw new Error(readErr.message);
 
     const accountIds = Array.from(new Set((rows ?? []).map((r: any) => r.account_id as string)));
+    const eventIds = Array.from(
+      new Set(
+        (rows ?? [])
+          .map((r: any) => r.financial_event_id as string | null)
+          .filter((id): id is string => !!id),
+      ),
+    );
+    await (context.supabase as any)
+      .from("transaction_statement_evidence")
+      .delete()
+      .eq("household_id", householdId)
+      .eq("import_batch_id", batchId);
     const { error: delErr } = await context.supabase
       .from("transactions")
       .delete()
       .eq("household_id", householdId)
       .eq("import_batch_id", batchId);
     if (delErr) throw new Error(delErr.message);
+    if (eventIds.length) {
+      const { error: eventDelErr } = await (context.supabase as any)
+        .from("financial_events")
+        .delete()
+        .eq("household_id", householdId)
+        .in("id", eventIds);
+      if (eventDelErr) throw new Error(eventDelErr.message);
+    }
+    await (context.supabase as any)
+      .from("statement_raw_transactions")
+      .delete()
+      .eq("household_id", householdId)
+      .eq("import_batch_id", batchId);
 
     const { recomputeAccountBalance } = await import("./statement-audit.server");
     for (const accountId of accountIds) {

@@ -34,7 +34,7 @@ export function AccountFormDialog({
   open: boolean;
   onOpenChange: (o: boolean) => void;
   initial?: any;
-  onSaved?: (account: { id: string }) => void;
+  onSaved?: (account: { id: string; name: string; category: string }) => void;
 }) {
   const isEdit = !!initial?.id;
   const [category, setCategory] = useState<AccountCategory>(

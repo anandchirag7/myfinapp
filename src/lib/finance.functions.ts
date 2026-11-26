@@ -1,4 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
+import { economicImpact, isEconomicType, economicTypeFromLegacy } from "./statement-domain";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { getHouseholdId } from "@/lib/household.server";
@@ -332,25 +333,35 @@ export const getDashboard = createServerFn({ method: "GET" })
     }
 
     if (!aggregatedViaRpc) {
-      const { data: rangeTxns } = await context.supabase
+      const { data: rangeTxns } = await (context.supabase as any)
         .from("transactions")
-        .select("type, amount, txn_date, category:categories(name)")
+        .select("type, economic_type, statement_direction, amount, txn_date, category:categories(name)")
         .eq("household_id", householdId)
         .gte("txn_date", rangeStartStr)
         .limit(5000);
 
       for (const t of rangeTxns ?? []) {
         const amt = Number(t.amount);
-        if (t.type === "income") income += amt;
-        else if (t.type === "expense") {
-          expense += amt;
+        const direction =
+          t.statement_direction === "credit" || t.statement_direction === "debit"
+            ? t.statement_direction
+            : t.type === "income"
+              ? "credit"
+              : "debit";
+        const economicType = isEconomicType(t.economic_type)
+          ? t.economic_type
+          : economicTypeFromLegacy(t.type, direction);
+        const impact = economicImpact(economicType, direction, amt);
+        income += impact.income;
+        expense += impact.spending;
+        if (impact.spending !== 0) {
           const cat = (t as any).category?.name ?? "Uncategorized";
-          spendByCat[cat] = (spendByCat[cat] ?? 0) + amt;
+          spendByCat[cat] = (spendByCat[cat] ?? 0) + impact.spending;
         }
         const key = (t.txn_date as string).slice(0, 7);
         if (buckets[key]) {
-          if (t.type === "income") buckets[key].income += amt;
-          else if (t.type === "expense") buckets[key].expense += amt;
+          buckets[key].income += impact.income;
+          buckets[key].expense += impact.spending;
         }
       }
     }
@@ -440,6 +451,5 @@ export const listGoals = createServerFn({ method: "GET" })
     if (error) return [];
     return data ?? [];
   });
-
 
 

@@ -5,6 +5,8 @@ import { getHouseholdId } from "@/lib/household.server";
 import { createOllamaClient } from "./ollama.server";
 import { parseManualCategoryAssignments } from "./statement-classification-policy";
 import { buildTransferEvidenceDescriptor, transactionInsertFields } from "./statement-transfers";
+import { ECONOMIC_TYPES } from "./statement-domain";
+import { buildImportReviewGroups } from "./statement-account-reconciliation";
 import {
   extractRowsFromAOA,
   parsePdfWithAI,
@@ -567,7 +569,7 @@ export const extractStatementRows = createServerFn({ method: "POST" })
         const aoa = XLSX.utils.sheet_to_json(wb.Sheets[name], {
           header: 1,
           raw: true,
-          blankrows: false,
+          blankrows: true,
         }) as any[][];
         const rows = extractRowsFromAOA(aoa);
         extracted.push(...rows);
@@ -582,7 +584,7 @@ export const extractStatementRows = createServerFn({ method: "POST" })
         aoa = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {
           header: 1,
           raw: true,
-          blankrows: false,
+          blankrows: true,
         }) as any[][];
       } catch {
         // Line-by-line fallback for text files
@@ -807,6 +809,14 @@ Do not invent category names. Use the payee and raw narration together. Return n
 
 const bulkInput = z.object({
   accountId: z.string().uuid(),
+  sourceSummary: z
+    .object({
+      parsed: z.number().int().positive().max(10000),
+      included: z.number().int().positive().max(10000),
+      excluded: z.number().int().nonnegative().max(10000),
+      duplicatesExcluded: z.number().int().nonnegative().max(10000),
+    })
+    .optional(),
   transactions: z
     .array(
       z
@@ -817,14 +827,63 @@ const bulkInput = z.object({
           category_id: z.string().uuid().nullable().optional(),
           merchant: z.string().max(200).nullable().optional(),
           note: z.string().max(500).optional().nullable(),
+          raw_narration: z.string().max(4000).optional(),
           split_parent_id: z.string().uuid().nullable().optional(),
           transfer_account_id: z.string().uuid().nullable().optional(),
           statement_direction: z.enum(["debit", "credit"]).optional(),
           normalized_pattern: z.string().max(240).optional(),
           statement_row_key: z.string().max(200).optional(),
+          economic_type: z.enum(ECONOMIC_TYPES).optional(),
+          classification_confidence: z.number().min(0).max(1).optional(),
+          classification_source: z.string().max(80).optional(),
+          classification_reasons: z.array(z.string().max(500)).max(20).optional(),
+          source_fingerprint: z.string().length(64).optional(),
+          source_row_number: z.number().int().positive().optional(),
+          value_date: z.string().nullable().optional(),
+          original_reference: z.string().max(300).nullable().optional(),
+          debit: z.number().positive().nullable().optional(),
+          credit: z.number().positive().nullable().optional(),
+          closing_balance: z.number().nullable().optional(),
+          raw_cells: z
+            .array(
+              z.preprocess(
+                (value) => (value === undefined ? null : value),
+                z.union([z.string(), z.number().finite(), z.boolean(), z.null()]),
+              ),
+            )
+            .max(128)
+            .optional(),
+          payment_rail: z.string().max(40).optional(),
+          canonical_entity_id: z.string().uuid().nullable().optional(),
+          processor_entity_id: z.string().uuid().nullable().optional(),
+          recurring_candidate: z
+            .object({
+              key: z.string().min(3).max(500),
+              providerKey: z.string().min(1).max(240),
+              mandateReference: z.string().max(300).nullable(),
+              expectedAmount: z.number().positive(),
+              amountTolerance: z.number().nonnegative(),
+              cadence: z.enum(["weekly", "monthly", "quarterly", "yearly", "irregular"]),
+              expectedDay: z.number().int().min(1).max(31).nullable(),
+              windowDays: z.number().int().min(0).max(15),
+              observationKeys: z.array(z.string()).min(2).max(1000),
+              confidence: z.number().min(0).max(1),
+              firstObservedOn: z.string(),
+              lastObservedOn: z.string(),
+            })
+            .optional(),
+          economic_correction_scope: z
+            .enum(["transaction", "future", "existing_future"])
+            .optional(),
         })
         .superRefine((transaction, ctx) => {
           if (transaction.type !== "transfer") return;
+          // An unresolved card payment is intentionally allowed through. It is
+          // saved as a debit plus a review-inbox item, not as an internal transfer.
+          if (
+            transaction.economic_type === "CREDIT_CARD_PAYMENT" &&
+            !transaction.transfer_account_id
+          ) return;
           if (!transaction.transfer_account_id) {
             ctx.addIssue({
               code: "custom",
@@ -857,6 +916,23 @@ const bulkInput = z.object({
   /** Idempotency: the token minted when the statement was parsed. */
   importToken: z.string().uuid().optional(),
   uploadId: z.string().uuid().optional(),
+}).superRefine((input, ctx) => {
+  const summary = input.sourceSummary;
+  if (!summary) return;
+  if (summary.parsed !== summary.included + summary.excluded) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["sourceSummary", "parsed"],
+      message: "Parsed count must equal included plus excluded rows",
+    });
+  }
+  if (summary.included !== input.transactions.length) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["sourceSummary", "included"],
+      message: "Included count must match the transaction payload",
+    });
+  }
 });
 
 const MAX_ALIASES_PER_PAYEE = 50;
@@ -915,12 +991,18 @@ export const bulkInsertTransactions = createServerFn({ method: "POST" })
       claimedUploadId = (upload?.id as string) ?? data.uploadId ?? null;
     }
 
-    const transferTxns = data.transactions.filter((transaction) => transaction.type === "transfer");
-    if (transferTxns.length) {
+    const cardPaymentTxns = data.transactions.filter(
+      (transaction) => transaction.economic_type === "CREDIT_CARD_PAYMENT",
+    );
+    const transferLikeTxns = data.transactions.filter((transaction) => transaction.type === "transfer");
+    const transferTxns = transferLikeTxns.filter(
+      (transaction) => transaction.economic_type !== "CREDIT_CARD_PAYMENT",
+    );
+    if (transferLikeTxns.length) {
       const accountIds = Array.from(
         new Set([
           data.accountId,
-          ...transferTxns.map((transaction) => transaction.transfer_account_id!),
+          ...transferLikeTxns.map((transaction) => transaction.transfer_account_id!),
         ]),
       );
       const { data: transferAccounts, error: accountError } = await context.supabase
@@ -1028,9 +1110,21 @@ export const bulkInsertTransactions = createServerFn({ method: "POST" })
 
     // ---- Transaction inserts & EMI Hierarchy linking ----
     const batchId = data.importToken ?? crypto.randomUUID();
-    const rawTxns = data.transactions.filter((transaction) => transaction.type !== "transfer");
+    const internalTransferSet = new Set(transferTxns);
+    const cardPaymentSet = new Set(cardPaymentTxns);
+    const rawTxns = data.transactions.filter(
+      (transaction) => !internalTransferSet.has(transaction) && !cardPaymentSet.has(transaction),
+    );
     let createdTransfers = 0;
     let reconciledTransfers = 0;
+    let createdCardPayments = 0;
+    let reconciledCardPayments = 0;
+    let reviewItemsCreated = 0;
+    let rawEvidenceSaved = 0;
+    let correctionsLearned = 0;
+    let existingCorrectionsApplied = 0;
+    let correctionWarning: string | null = null;
+    const newMandateIds: string[] = [];
 
     const cleanStr = (s: string) => (s ?? "").replace(/[^a-zA-Z0-9]+/g, " ").toUpperCase();
 
@@ -1088,6 +1182,144 @@ export const bulkInsertTransactions = createServerFn({ method: "POST" })
     }
 
     try {
+      const candidateByKey = new Map(
+        data.transactions
+          .filter((transaction) => transaction.recurring_candidate)
+          .map((transaction) => [transaction.recurring_candidate!.key, transaction]),
+      );
+      const recurringMandateIdByKey = new Map<string, string>();
+      if (candidateByKey.size) {
+        const candidateKeys = [...candidateByKey.keys()];
+        const { data: existingMandates, error: existingMandatesError } = await (
+          context.supabase as any
+        )
+          .from("recurring_mandates")
+          .select("id,candidate_key")
+          .eq("household_id", householdId)
+          .eq("account_id", data.accountId)
+          .in("candidate_key", candidateKeys);
+        if (existingMandatesError) throw existingMandatesError;
+        const existingKeys = new Set(
+          (existingMandates ?? []).map((row: any) => String(row.candidate_key)),
+        );
+        const newCandidates = [...candidateByKey.entries()].filter(([key]) => !existingKeys.has(key));
+        if (newCandidates.length) {
+          const { data: insertedMandates, error: mandateInsertError } = await (
+            context.supabase as any
+          )
+            .from("recurring_mandates")
+            .insert(
+              newCandidates.map(([key, transaction]) => {
+                const candidate = transaction.recurring_candidate!;
+                return {
+                  household_id: householdId,
+                  account_id: data.accountId,
+                  candidate_key: key,
+                  entity_id: transaction.canonical_entity_id ?? null,
+                  provider_key: candidate.providerKey,
+                  mandate_reference: candidate.mandateReference,
+                  expected_amount: candidate.expectedAmount,
+                  amount_tolerance: candidate.amountTolerance,
+                  cadence: candidate.cadence,
+                  expected_day: candidate.expectedDay,
+                  window_days: candidate.windowDays,
+                  economic_type: transaction.economic_type ?? "UNKNOWN",
+                  status: "active",
+                  observation_count: candidate.observationKeys.length,
+                  first_observed_on: candidate.firstObservedOn,
+                  last_observed_on: candidate.lastObservedOn,
+                  created_by: context.userId,
+                };
+              }),
+            )
+            .select("id,candidate_key");
+          if (mandateInsertError) throw mandateInsertError;
+          for (const row of insertedMandates ?? []) newMandateIds.push(String(row.id));
+        }
+        const { data: allMandates, error: mandateLoadError } = await (context.supabase as any)
+          .from("recurring_mandates")
+          .select("id,candidate_key")
+          .eq("household_id", householdId)
+          .eq("account_id", data.accountId)
+          .in("candidate_key", candidateKeys);
+        if (mandateLoadError) throw mandateLoadError;
+        for (const row of allMandates ?? [])
+          recurringMandateIdByKey.set(String(row.candidate_key), String(row.id));
+      }
+      for (const transaction of data.transactions) {
+        (transaction as typeof transaction & { recurring_mandate_id?: string | null }).recurring_mandate_id =
+          transaction.recurring_candidate
+            ? (recurringMandateIdByKey.get(transaction.recurring_candidate.key) ?? null)
+            : null;
+      }
+
+      // Persist immutable source evidence first. Ignore duplicate evidence so
+      // an interrupted request can be retried safely, then load its IDs in
+      // bounded chunks for normalized-row lineage.
+      const evidenceCandidates = data.transactions.filter(
+        (transaction) =>
+          claimedUploadId &&
+          transaction.source_fingerprint &&
+          transaction.source_row_number &&
+          transaction.statement_direction &&
+          (transaction.debit != null || transaction.credit != null),
+      );
+      rawEvidenceSaved = evidenceCandidates.length;
+      const rawIdByFingerprint = new Map<string, string>();
+      for (let i = 0; i < evidenceCandidates.length; i += 500) {
+        const slice = evidenceCandidates.slice(i, i + 500);
+        const { error: rawInsertError } = await (context.supabase as any)
+          .from("statement_raw_transactions")
+          .upsert(
+            slice.map((transaction) => ({
+              household_id: householdId,
+              upload_id: claimedUploadId!,
+              import_batch_id: batchId,
+              account_id: data.accountId,
+              source_row_number: transaction.source_row_number!,
+              transaction_date: transaction.txn_date,
+              value_date: transaction.value_date ?? null,
+              narration: String(
+                transaction.raw_narration ??
+                  transaction.note ??
+                  transaction.merchant ??
+                  "Statement transaction",
+              ).slice(0, 4000),
+              bank_reference: transaction.original_reference ?? null,
+              direction: transaction.statement_direction!,
+              debit: transaction.debit ?? null,
+              credit: transaction.credit ?? null,
+              closing_balance: transaction.closing_balance ?? null,
+              raw_cells: transaction.raw_cells ?? [],
+              source_fingerprint: transaction.source_fingerprint!,
+              parser_version: "hdfc-structured-v1",
+              created_by: context.userId,
+            })),
+            {
+              onConflict: "household_id,upload_id,source_fingerprint",
+              ignoreDuplicates: true,
+            },
+          );
+        if (rawInsertError) throw rawInsertError;
+        const { data: storedRaw, error: rawLoadError } = await (context.supabase as any)
+          .from("statement_raw_transactions")
+          .select("id,source_fingerprint")
+          .eq("household_id", householdId)
+          .eq("upload_id", claimedUploadId!)
+          .in(
+            "source_fingerprint",
+            slice.map((transaction) => transaction.source_fingerprint!),
+          );
+        if (rawLoadError) throw rawLoadError;
+        for (const row of storedRaw ?? []) rawIdByFingerprint.set(row.source_fingerprint, row.id);
+      }
+      for (const transaction of data.transactions) {
+        (transaction as typeof transaction & { raw_transaction_id?: string | null }).raw_transaction_id =
+          transaction.source_fingerprint
+            ? (rawIdByFingerprint.get(transaction.source_fingerprint) ?? null)
+            : null;
+      }
+
       // Internal transfers are canonical rows: source account is debited and
       // destination account is credited. A second statement reconciles to the
       // same row by account pair, amount and a three-day posting window.
@@ -1102,7 +1334,7 @@ export const bulkInsertTransactions = createServerFn({ method: "POST" })
             transaction.note ?? transaction.merchant ?? transaction.normalized_pattern ?? "",
           rowKey: transaction.statement_row_key,
         });
-        const rowFingerprint = await sha256Hex(descriptor);
+        const rowFingerprint = transaction.source_fingerprint ?? await sha256Hex(descriptor);
         const { data: resolved, error } = await context.supabase.rpc(
           "resolve_statement_internal_transfer",
           {
@@ -1132,6 +1364,76 @@ export const bulkInsertTransactions = createServerFn({ method: "POST" })
         const result = resolved?.[0];
         if (result?.created) createdTransfers++;
         else reconciledTransfers++;
+        if (result?.transaction_id) {
+          const { error: transferUpdateError } = await (context.supabase as any)
+            .from("transactions")
+            .update({
+              economic_type: "INTERNAL_TRANSFER",
+              classification_confidence: 1,
+              classification_source: "confirmed_internal_transfer",
+              classification_reasons: ["The user confirmed both owned accounts."],
+              interpretation_version: "financial-events-v1",
+            })
+            .eq("id", result.transaction_id)
+            .eq("household_id", householdId);
+          if (transferUpdateError) throw transferUpdateError;
+        }
+        if (transaction.normalized_pattern) {
+          const { error: aliasError } = await (context.supabase as any)
+            .from("account_aliases")
+            .upsert(
+              {
+                household_id: householdId,
+                account_id: transaction.transfer_account_id!,
+                normalized_alias: transaction.normalized_pattern,
+                alias_type: "narration",
+                confidence: 1,
+                verified: true,
+                created_by: context.userId,
+              },
+              { onConflict: "household_id,normalized_alias,alias_type" },
+            );
+          if (aliasError) throw aliasError;
+        }
+      }
+
+      // Card payments are reconciled independently from the payment processor.
+      // A selected destination creates a provisional card leg; importing that
+      // card statement later attaches evidence instead of duplicating money.
+      for (const transaction of cardPaymentTxns) {
+        const direction = transaction.statement_direction ?? (transaction.type === "income" ? "credit" : "debit");
+        const descriptor = buildTransferEvidenceDescriptor({
+          accountId: data.accountId,
+          date: transaction.txn_date,
+          amount: transaction.amount,
+          direction,
+          description: transaction.note ?? transaction.merchant ?? transaction.normalized_pattern ?? "",
+          rowKey: transaction.statement_row_key,
+        });
+        const rowFingerprint = transaction.source_fingerprint ?? await sha256Hex(descriptor);
+        const { data: resolved, error } = await (context.supabase as any).rpc(
+          "resolve_statement_card_payment",
+          {
+            p_household_id: householdId,
+            p_user_id: context.userId,
+            p_statement_account_id: data.accountId,
+            p_destination_card_account_id: transaction.destination_account_id ?? transaction.transfer_account_id ?? null,
+            p_direction: direction,
+            p_amount: transaction.amount,
+            p_txn_date: transaction.txn_date,
+            p_merchant: transaction.merchant ?? "",
+            p_note: transaction.note ?? "",
+            p_normalized_pattern: transaction.normalized_pattern ?? "",
+            p_processor_reference: transaction.original_reference ?? "",
+            p_row_fingerprint: rowFingerprint,
+            p_statement_upload_id: claimedUploadId,
+            p_import_batch_id: batchId,
+          },
+        );
+        if (error) throw error;
+        const result = resolved?.[0];
+        if (result?.reconciled) reconciledCardPayments++;
+        else if (result?.created) createdCardPayments++;
       }
 
       // 1. Separate parents and standalone transactions from children that require split_parent_id
@@ -1201,16 +1503,101 @@ export const bulkInsertTransactions = createServerFn({ method: "POST" })
         const { error } = await context.supabase.from("transactions").insert(slice);
         if (error) throw error;
       }
+
+      // Review is deliberately non-blocking. Persist grouped exceptions so a
+      // large statement can save immediately and be cleaned up from the inbox.
+      if (claimedUploadId) {
+        const reviewGroups = buildImportReviewGroups(
+          data.transactions
+            .filter((transaction) => transaction.source_fingerprint && transaction.statement_direction)
+            .map((transaction) => ({
+              id: rawIdByFingerprint.get(transaction.source_fingerprint!) ?? "",
+              economicType: transaction.economic_type ?? "UNKNOWN",
+              pattern: transaction.normalized_pattern ?? transaction.merchant ?? "unknown",
+              amount: transaction.amount,
+              direction: transaction.statement_direction!,
+              destinationAccountId: transaction.destination_account_id ?? transaction.transfer_account_id ?? null,
+              reference: transaction.original_reference ?? null,
+            }))
+            .filter((transaction) => transaction.id),
+        );
+        if (reviewGroups.length) {
+          const { data: cardAccounts, error: cardsError } = await context.supabase
+            .from("accounts")
+            .select("id,name")
+            .eq("household_id", householdId)
+            .eq("category", "credit_card");
+          if (cardsError) throw cardsError;
+          const economicOptions = [
+            "INCOME", "REFUND", "INVESTMENT_REDEMPTION", "BROKERAGE_SETTLEMENT",
+            "INVESTMENT_INCOME", "CASH_DEPOSIT", "VERIFICATION_TRANSACTION",
+          ].map((value) => ({ value, label: value.replaceAll("_", " ") }));
+          const { error: reviewError } = await (context.supabase as any)
+            .from("statement_review_items")
+            .upsert(
+              reviewGroups.map((group) => ({
+                household_id: householdId,
+                upload_id: claimedUploadId,
+                review_type: group.reviewType,
+                group_key: group.groupKey,
+                priority: group.priority,
+                affected_raw_transaction_ids: group.rowIds,
+                prompt: group.prompt,
+                options: group.reviewType === "destination_card"
+                  ? (cardAccounts ?? []).map((account) => ({ value: account.id, label: account.name }))
+                  : economicOptions,
+                status: "open",
+              })),
+              { onConflict: "household_id,upload_id,review_type,group_key" },
+            );
+          if (reviewError) throw reviewError;
+          reviewItemsCreated = reviewGroups.length;
+        }
+      }
     } catch (e: any) {
       // All-or-nothing: roll back
-      await context.supabase
+      const { data: rollbackEventRows } = await context.supabase
+        .from("transactions")
+        .select("financial_event_id")
+        .eq("household_id", householdId)
+        .eq("import_batch_id", batchId);
+      const rollbackEventIds = Array.from(
+        new Set(
+          (rollbackEventRows ?? [])
+            .map((row: any) => row.financial_event_id as string | null)
+            .filter((id): id is string => !!id),
+        ),
+      );
+      await (context.supabase as any)
         .from("transaction_statement_evidence")
         .delete()
         .eq("import_batch_id", batchId);
       await context.supabase.from("transactions").delete().eq("import_batch_id", batchId);
+      if (rollbackEventIds.length) {
+        await (context.supabase as any)
+          .from("financial_events")
+          .delete()
+          .eq("household_id", householdId)
+          .in("id", rollbackEventIds);
+      }
+      await (context.supabase as any)
+        .from("statement_raw_transactions")
+        .delete()
+        .eq("household_id", householdId)
+        .eq("import_batch_id", batchId);
+      if (claimedUploadId) {
+        await (context.supabase as any)
+          .from("statement_review_items")
+          .delete()
+          .eq("household_id", householdId)
+          .eq("upload_id", claimedUploadId);
+      }
+      if (newMandateIds.length) {
+        await (context.supabase as any).from("recurring_mandates").delete().in("id", newMandateIds);
+      }
       const rollbackAccounts = new Set<string>([
         data.accountId,
-        ...transferTxns.map((transaction) => transaction.transfer_account_id!).filter(Boolean),
+        ...transferLikeTxns.map((transaction) => transaction.transfer_account_id!).filter(Boolean),
       ]);
       for (const accountId of rollbackAccounts) {
         await context.supabase.rpc("recompute_account_balance", {
@@ -1223,13 +1610,108 @@ export const bulkInsertTransactions = createServerFn({ method: "POST" })
       );
     }
 
+    // Learn confirmed interpretations only after the financial rows land.
+    // Existing history is changed only for the explicit existing+future scope.
+    const corrections = new Map<string, (typeof data.transactions)[number]>();
+    for (const transaction of data.transactions) {
+      if (
+        transaction.economic_correction_scope &&
+        transaction.normalized_pattern &&
+        transaction.statement_direction &&
+        transaction.economic_type
+      ) {
+        corrections.set(
+          `${transaction.normalized_pattern}\u0000${transaction.statement_direction}`,
+          transaction,
+        );
+      }
+    }
+    try {
+      for (const transaction of corrections.values()) {
+        const scope = transaction.economic_correction_scope!;
+        let affectedCount = data.transactions.filter(
+          (row) =>
+            row.normalized_pattern === transaction.normalized_pattern &&
+            row.statement_direction === transaction.statement_direction,
+        ).length;
+        if (scope !== "transaction") {
+          const { error: ruleError } = await (context.supabase as any)
+            .from("statement_economic_rules")
+            .upsert(
+              {
+                household_id: householdId,
+                normalized_pattern: transaction.normalized_pattern,
+                direction: transaction.statement_direction,
+                economic_type: transaction.economic_type,
+                created_by: context.userId,
+                updated_at: new Date().toISOString(),
+              },
+              { onConflict: "household_id,normalized_pattern,direction" },
+            );
+          if (ruleError) throw ruleError;
+          correctionsLearned++;
+        }
+        if (scope === "existing_future") {
+          const { data: matchingRows, error: matchError } = await context.supabase
+            .from("transactions")
+            .select("id")
+            .eq("household_id", householdId)
+            .eq("normalized_pattern", transaction.normalized_pattern!)
+            .eq("statement_direction", transaction.statement_direction!)
+            .limit(5001);
+          if (matchError) throw matchError;
+          if ((matchingRows?.length ?? 0) > 5000) {
+            correctionWarning =
+              "A correction matched more than 5,000 historical rows, so history was not rewritten; the future rule was saved.";
+          } else {
+            const ids = (matchingRows ?? []).map((row: any) => String(row.id));
+            for (let i = 0; i < ids.length; i += 500) {
+              const { error: updateError } = await context.supabase
+                .from("transactions")
+                .update({
+                  economic_type: transaction.economic_type,
+                  classification_confidence: 1,
+                  classification_source: "user_confirmed_rule",
+                  classification_reasons: [
+                    "The user applied this correction to existing and future matches.",
+                  ],
+                  interpretation_version: "financial-events-v1",
+                })
+                .in("id", ids.slice(i, i + 500))
+                .eq("household_id", householdId);
+              if (updateError) throw updateError;
+            }
+            affectedCount = ids.length;
+            existingCorrectionsApplied += ids.length;
+          }
+        }
+        const { error: auditError } = await (context.supabase as any)
+          .from("statement_correction_audit")
+          .insert({
+            household_id: householdId,
+            import_batch_id: batchId,
+            normalized_pattern: transaction.normalized_pattern,
+            direction: transaction.statement_direction,
+            economic_type: transaction.economic_type,
+            apply_scope: scope,
+            affected_count: affectedCount,
+            created_by: context.userId,
+          });
+        if (auditError) throw auditError;
+      }
+    } catch (correctionError: any) {
+      correctionWarning = `Transactions were imported, but correction learning could not finish: ${correctionError?.message ?? "unknown error"}`;
+    }
+
     if (claimedUploadId) {
       await context.supabase
         .from("statement_uploads")
         .update({
           status: "complete",
           imported_at: new Date().toISOString(),
-          inserted_count: rawTxns.length + createdTransfers,
+          // Physical statement rows processed, not just newly-created ledger
+          // rows (a reconciled opposite leg is still successfully imported).
+          inserted_count: data.transactions.length,
           error: null,
         })
         .eq("id", claimedUploadId);
@@ -1263,10 +1745,31 @@ export const bulkInsertTransactions = createServerFn({ method: "POST" })
         .update({ current_balance: balance })
         .eq("id", data.accountId);
     }
+    for (const targetAccountId of new Set(
+      transferLikeTxns
+        .map((transaction) => transaction.transfer_account_id)
+        .filter((id): id is string => !!id && id !== data.accountId),
+    )) {
+      await context.supabase.rpc("recompute_account_balance", {
+        p_household_id: householdId,
+        p_account_id: targetAccountId,
+      });
+    }
     return {
       ok: true,
-      inserted: rawTxns.length + createdTransfers,
+      inserted: data.transactions.length,
+      ledgerEntriesCreated: rawTxns.length + createdTransfers + createdCardPayments,
+      processed: data.sourceSummary?.parsed ?? data.transactions.length,
+      submitted: data.transactions.length,
+      excluded: data.sourceSummary?.excluded ?? 0,
+      duplicatesSkipped: data.sourceSummary?.duplicatesExcluded ?? 0,
+      correctionsLearned,
+      existingCorrectionsApplied,
+      correctionWarning,
+      rawEvidenceSaved,
       reconciledTransfers,
+      reconciledCardPayments,
+      reviewItemsCreated,
       alreadyImported: false,
       batchId,
     };

@@ -122,11 +122,13 @@ export const TransactionTableHeader = memo(function TransactionTableHeader() {
 export const TransactionFooter = memo(function TransactionFooter({
   includedCount,
   saving,
+  blocked = false,
   onBack,
   onSave,
 }: {
   includedCount: number;
   saving: boolean;
+  blocked?: boolean;
   onBack: () => void;
   onSave: () => void;
 }) {
@@ -139,7 +141,7 @@ export const TransactionFooter = memo(function TransactionFooter({
         <span className="text-[11px] tabular-nums text-muted-foreground">
           {includedCount.toLocaleString()} selected
         </span>
-        <Button size="sm" onClick={onSave} disabled={saving || includedCount === 0}>
+        <Button size="sm" onClick={onSave} disabled={saving || blocked || includedCount === 0}>
           {saving ? "Importing…" : `Save ${includedCount.toLocaleString()} transactions`}
         </Button>
       </div>

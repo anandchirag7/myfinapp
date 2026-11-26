@@ -21,6 +21,18 @@ import { useEditHistory, type ReviewSnapshot } from "./review/history";
 import { ProfilerOverlay, recordCommit, setProfiling } from "./review/profiler";
 import type { RowCallbacks } from "./review/transaction-row";
 import type { Category, ReviewRow, RowFilter } from "./review/types";
+import { AlertTriangle } from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import type { EconomicType } from "@/lib/statement-domain";
+import type { CorrectionScope } from "@/lib/statement-corrections";
+import { Button } from "@/components/ui/button";
+import { AccountFormDialog } from "@/components/account-form-dialog";
 
 export type { ReviewRow } from "./review/types";
 
@@ -38,12 +50,14 @@ const PAGE_SIZE = 400;
 export function ReviewStep({
   rows: initialRows,
   categories,
+  accounts,
   saving,
   onBack,
   onSave,
 }: {
   rows: ReviewRow[];
   categories: Category[];
+  accounts: Array<{ id: string; name: string; category: string }>;
   saving: boolean;
   onBack: () => void;
   onSave: (rows: ReviewRow[]) => void;
@@ -56,6 +70,13 @@ export function ReviewStep({
   const [detailId, setDetailId] = useState<string | null>(null);
   const [loadedCount, setLoadedCount] = useState(PAGE_SIZE);
   const [profiling, setProfilingState] = useState(false);
+  const [addingCard, setAddingCard] = useState(false);
+  const [addedAccounts, setAddedAccounts] = useState<
+    Array<{ id: string; name: string; category: string }>
+  >([]);
+  const [correctionScopeByGroup, setCorrectionScopeByGroup] = useState<
+    Record<string, CorrectionScope>
+  >({});
   const [, startTransition] = useTransition();
   const seeded = useRef<ReviewRow[] | null>(null);
 
@@ -131,7 +152,7 @@ export function ReviewStep({
         String(r.amount).includes(q)
       );
     });
-  }, [orderedIds, byId, filter, deferredQuery, (filter === "included" || filter === "excluded") ? selectedIds : null]);
+  }, [orderedIds, byId, filter, deferredQuery, selectedIds]);
 
   /** Rows a bulk action applies to: currently shown AND included. */
   const bulkTargets = useMemo(
@@ -151,6 +172,89 @@ export function ReviewStep({
     return { income, expense };
   }, [selectedIds, byId]);
 
+  const exceptionGroups = useMemo(() => {
+    const unknown = new Map<string, string[]>();
+    const cards = new Map<string, string[]>();
+    for (const id of selectedIds) {
+      const row = byId[id];
+      if (!row) continue;
+      if (row.economic_type === "UNKNOWN") {
+        const key = row.pattern || row.payee || "Unknown credit";
+        const ids = unknown.get(key) ?? [];
+        ids.push(id);
+        unknown.set(key, ids);
+      }
+      if (row.economic_type === "CREDIT_CARD_PAYMENT" && !row.destination_account_id) {
+        const identity = row.pattern || row.payee || "Credit card payment";
+        const reference = (row.original_reference ?? "").replace(/[^a-zA-Z0-9]/g, "").slice(-12);
+        const key = `${identity} · ₹${row.amount.toLocaleString("en-IN")}${reference ? ` · ${reference}` : ""}`;
+        const ids = cards.get(key) ?? [];
+        ids.push(id);
+        cards.set(key, ids);
+      }
+    }
+    return { unknown: [...unknown.entries()], cards: [...cards.entries()] };
+  }, [selectedIds, byId]);
+  const reviewQuestionCount = exceptionGroups.unknown.length + exceptionGroups.cards.length;
+  const visibleUnknownGroups = exceptionGroups.unknown.slice(0, 5);
+  const visibleCardGroups = exceptionGroups.cards.slice(0, 5);
+  const hiddenReviewCount = Math.max(
+    0,
+    reviewQuestionCount - visibleUnknownGroups.length - visibleCardGroups.length,
+  );
+  const creditCards = useMemo(() => {
+    const byId = new Map([...accounts, ...addedAccounts].map((account) => [account.id, account]));
+    return [...byId.values()].filter((account) => account.category === "credit_card");
+  }, [accounts, addedAccounts]);
+
+  const answerEconomicGroup = useCallback(
+    (ids: string[], economicType: EconomicType, scope: CorrectionScope) => {
+      history.record(snapshot("answer economic question"));
+      setById((prev) => {
+        const next = { ...prev };
+        for (const id of ids) {
+          const row = next[id];
+          if (!row) continue;
+          next[id] = {
+            ...row,
+            economic_type: economicType,
+            economic_confidence: 1,
+            economic_source: "user_confirmed",
+            economic_reasons: ["The user answered the grouped import question."],
+            economic_correction_scope: scope,
+          };
+        }
+        return next;
+      });
+    },
+    [history, snapshot],
+  );
+
+  const answerCardGroup = useCallback(
+    (ids: string[], destinationAccountId: string) => {
+      history.record(snapshot("select destination card"));
+      setById((prev) => {
+        const next = { ...prev };
+        for (const id of ids) {
+          const row = next[id];
+          if (!row) continue;
+          next[id] = {
+            ...row,
+            type: "transfer",
+            transfer_account_id: destinationAccountId,
+            destination_account_id: destinationAccountId,
+            economic_type: "CREDIT_CARD_PAYMENT",
+            economic_confidence: 1,
+            economic_source: "user_confirmed_card",
+            economic_reasons: ["The user selected the destination credit-card account."],
+          };
+        }
+        return next;
+      });
+    },
+    [history, snapshot],
+  );
+
   const callbacks = useMemo<RowCallbacks>(
     () => ({
       onToggleSelect: (id) => {
@@ -164,7 +268,9 @@ export function ReviewStep({
       },
       onPayeeChange: (id, payee) => {
         history.record(snapshot("payee edit"));
-        setById((prev) => (prev[id] ? { ...prev, [id]: { ...prev[id]!, payee, source: "manual" } } : prev));
+        setById((prev) =>
+          prev[id] ? { ...prev, [id]: { ...prev[id]!, payee, source: "manual" } } : prev,
+        );
       },
       onCategoryChange: (id, category_id) => {
         history.record(snapshot("category edit"));
@@ -288,6 +394,109 @@ export function ReviewStep({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2.5">
+      {reviewQuestionCount > 0 && (
+        <section className="max-h-52 space-y-2 overflow-y-auto rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs">
+          <div className="flex items-center gap-2 font-medium">
+            <AlertTriangle className="h-4 w-4 text-amber-600" />
+            {reviewQuestionCount} grouped item{reviewQuestionCount === 1 ? "" : "s"} need review
+          </div>
+          <p className="text-muted-foreground">
+            Optional: answer the highest-priority items now, or save all transactions and finish
+            them later in Settings.
+          </p>
+          {visibleUnknownGroups.map(([label, ids]) => (
+            <div key={`unknown:${label}`} className="flex items-center justify-between gap-3">
+              <span className="min-w-0 flex-1 truncate">
+                What are the {ids.length} credit{ids.length === 1 ? "" : "s"} from {label}?
+              </span>
+              <Select
+                value={correctionScopeByGroup[label] ?? "future"}
+                onValueChange={(value) =>
+                  setCorrectionScopeByGroup((current) => ({
+                    ...current,
+                    [label]: value as CorrectionScope,
+                  }))
+                }
+              >
+                <SelectTrigger className="h-8 w-48">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="transaction">This import only</SelectItem>
+                  <SelectItem value="future">Future similar</SelectItem>
+                  <SelectItem value="existing_future">Existing + future</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select
+                onValueChange={(value) =>
+                  answerEconomicGroup(
+                    ids,
+                    value as EconomicType,
+                    correctionScopeByGroup[label] ?? "future",
+                  )
+                }
+              >
+                <SelectTrigger className="h-8 w-52">
+                  <SelectValue placeholder="Choose meaning" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="INCOME">Income / reimbursement</SelectItem>
+                  <SelectItem value="REFUND">Refund</SelectItem>
+                  <SelectItem value="INVESTMENT_REDEMPTION">Investment redemption</SelectItem>
+                  <SelectItem value="BROKERAGE_SETTLEMENT">Brokerage settlement</SelectItem>
+                  <SelectItem value="INVESTMENT_INCOME">Dividend / investment income</SelectItem>
+                  <SelectItem value="CASH_DEPOSIT">Cash deposit</SelectItem>
+                  <SelectItem value="VERIFICATION_TRANSACTION">Verification transaction</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          ))}
+          {visibleCardGroups.map(([label, ids]) => (
+            <div key={`card:${label}`} className="flex items-center justify-between gap-3">
+              <span className="min-w-0 flex-1 truncate">
+                Which card received the {ids.length} payment{ids.length === 1 ? "" : "s"} to {label}
+                ?
+              </span>
+              <Select onValueChange={(value) => answerCardGroup(ids, value)}>
+                <SelectTrigger className="h-8 w-52">
+                  <SelectValue placeholder="Choose credit card" />
+                </SelectTrigger>
+                <SelectContent>
+                  {creditCards.map((account) => (
+                    <SelectItem key={account.id} value={account.id}>
+                      {account.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button
+                type="button"
+                variant="link"
+                size="sm"
+                className="px-0"
+                onClick={() => setAddingCard(true)}
+              >
+                Add card
+              </Button>
+            </div>
+          ))}
+          {exceptionGroups.cards.length > 0 && creditCards.length === 0 && (
+            <p className="text-amber-700">
+              No card account exists yet.{" "}
+              <button type="button" className="underline" onClick={() => setAddingCard(true)}>
+                Add one now
+              </button>
+              , or save and answer later.
+            </p>
+          )}
+          {hiddenReviewCount > 0 && (
+            <p className="text-muted-foreground">
+              {hiddenReviewCount} lower-priority group{hiddenReviewCount === 1 ? "" : "s"} will be
+              saved to the review inbox.
+            </p>
+          )}
+        </section>
+      )}
       <ProcessingStatus
         included={selectedIds.size}
         excluded={orderedIds.length - selectedIds.size}
@@ -328,6 +537,7 @@ export function ReviewStep({
       <TransactionFooter
         includedCount={selectedIds.size}
         saving={saving}
+        blocked={false}
         onBack={onBack}
         onSave={handleSave}
       />
@@ -335,6 +545,12 @@ export function ReviewStep({
         row={detailRow?.key ? detailRow : null}
         categories={categories}
         onClose={() => setDetailId(null)}
+      />
+      <AccountFormDialog
+        open={addingCard}
+        onOpenChange={setAddingCard}
+        initial={{ category: "credit_card", is_liability: true }}
+        onSaved={(account) => setAddedAccounts((current) => [...current, account])}
       />
     </div>
   );

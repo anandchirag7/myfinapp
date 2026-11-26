@@ -9,7 +9,22 @@ export type ExtractedTxn = {
   description: string;
   amount: number;
   type: "income" | "expense" | "transfer";
+  direction?: "debit" | "credit";
+  valueDate?: string | null;
+  reference?: string | null;
+  debit?: number | null;
+  credit?: number | null;
+  closingBalance?: number | null;
+  sourceRowNumber?: number;
+  rawCells?: Array<string | number | boolean | null>;
 };
+
+function serializableCell(value: unknown): string | number | boolean | null {
+  if (value == null) return null;
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value === "string" || typeof value === "boolean") return value;
+  return String(value);
+}
 
 /**
  * Recover a JSON object from a possibly-truncated LLM response.
@@ -133,6 +148,16 @@ const TYPE_KEYS = [
   "dr or cr",
   "cr or dr",
 ];
+const VALUE_DATE_KEYS = ["value date", "value dt", "val date"];
+const REFERENCE_KEYS = [
+  "chq./ref.no.",
+  "chq/ref no",
+  "chq ref no",
+  "reference no",
+  "transaction reference",
+  "utr",
+];
+const BALANCE_KEYS = ["closing balance", "balance", "running balance", "available balance"];
 
 function norm(s: any): string {
   return String(s ?? "")
@@ -259,6 +284,9 @@ export function extractRowsFromAOA(aoa: any[][]): ExtractedTxn[] {
   const creditKey = findKey(headers, CREDIT_KEYS);
   const amountKey = findKey(headers, AMOUNT_KEYS);
   const typeKey = findKey(headers, TYPE_KEYS);
+  const valueDateKey = findKey(headers, VALUE_DATE_KEYS);
+  const referenceKey = findKey(headers, REFERENCE_KEYS);
+  const balanceKey = findKey(headers, BALANCE_KEYS);
   if (!dateKey || !descKey || (!debitKey && !creditKey && !amountKey)) return [];
 
   const idx = (k: string | null) => (k ? headers.indexOf(k) : -1);
@@ -267,7 +295,10 @@ export function extractRowsFromAOA(aoa: any[][]): ExtractedTxn[] {
     dbi = idx(debitKey),
     cri = idx(creditKey),
     ai = idx(amountKey),
-    ti = idx(typeKey);
+    ti = idx(typeKey),
+    vdi = idx(valueDateKey),
+    ri = idx(referenceKey),
+    bi = idx(balanceKey);
 
   const out: ExtractedTxn[] = [];
   for (let r = headerIdx + 1; r < aoa.length; r++) {
@@ -278,10 +309,12 @@ export function extractRowsFromAOA(aoa: any[][]): ExtractedTxn[] {
 
     let amount: number | null = null;
     let type: "income" | "expense" | "transfer" = "expense";
+    let debit: number | null = null;
+    let credit: number | null = null;
 
     if (dbi >= 0 || cri >= 0) {
-      const debit = dbi >= 0 ? parseNumber(row[dbi]) : null;
-      const credit = cri >= 0 ? parseNumber(row[cri]) : null;
+      debit = dbi >= 0 ? parseNumber(row[dbi]) : null;
+      credit = cri >= 0 ? parseNumber(row[cri]) : null;
       if (debit && Math.abs(debit) > 0) {
         amount = Math.abs(debit);
         type = "expense";
@@ -339,7 +372,20 @@ export function extractRowsFromAOA(aoa: any[][]): ExtractedTxn[] {
     )
       continue;
 
-    out.push({ date, description: desc, amount, type });
+    out.push({
+      date,
+      valueDate: vdi >= 0 ? parseDate(row[vdi]) : null,
+      description: desc,
+      reference: ri >= 0 ? String(row[ri] ?? "").trim() || null : null,
+      debit: debit == null ? null : Math.abs(debit),
+      credit: credit == null ? null : Math.abs(credit),
+      closingBalance: bi >= 0 ? parseNumber(row[bi]) : null,
+      amount,
+      direction: type === "income" ? "credit" : "debit",
+      type,
+      sourceRowNumber: r + 1,
+      rawCells: Array.from(row, serializableCell),
+    });
   }
   return out;
 }

@@ -1,3 +1,5 @@
+import type { EconomicType } from "./statement-domain";
+
 export type StatementDirection = "debit" | "credit";
 export type TransferIntent = "external" | "possible_internal" | "confirmed_internal";
 
@@ -124,6 +126,18 @@ export function transactionInsertFields(input: {
   normalized_pattern?: string;
   statement_direction?: StatementDirection;
   statement_row_key?: string;
+  raw_transaction_id?: string | null;
+  economic_type?: EconomicType;
+  value_date?: string | null;
+  original_reference?: string | null;
+  payment_rail?: string;
+  classification_confidence?: number;
+  classification_source?: string;
+  classification_reasons?: string[];
+  source_fingerprint?: string;
+  canonical_entity_id?: string | null;
+  processor_entity_id?: string | null;
+  recurring_mandate_id?: string | null;
 }) {
   return {
     txn_date: input.txn_date,
@@ -135,5 +149,19 @@ export function transactionInsertFields(input: {
     split_parent_id: input.split_parent_id ?? null,
     transfer_account_id: input.transfer_account_id ?? null,
     normalized_pattern: input.normalized_pattern ?? null,
+    raw_transaction_id: input.raw_transaction_id ?? null,
+    economic_type: input.economic_type ?? (input.type === "transfer" ? "INTERNAL_TRANSFER" : "UNKNOWN"),
+    statement_direction: input.statement_direction ?? null,
+    value_date: input.value_date ?? null,
+    original_reference: input.original_reference ?? null,
+    payment_rail: input.payment_rail ?? null,
+    classification_confidence: input.classification_confidence ?? null,
+    classification_source: input.classification_source ?? null,
+    classification_reasons: input.classification_reasons ?? [],
+    source_fingerprint: input.source_fingerprint ?? null,
+    interpretation_version: "financial-events-v1",
+    canonical_entity_id: input.canonical_entity_id ?? null,
+    processor_entity_id: input.processor_entity_id ?? null,
+    recurring_mandate_id: input.recurring_mandate_id ?? null,
   };
 }

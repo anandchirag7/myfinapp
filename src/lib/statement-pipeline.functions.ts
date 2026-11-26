@@ -6,9 +6,11 @@ import { WEB_ENRICHMENT_NOTICE_VERSION } from "./merchant-web-enrichment";
 const startInput = z.object({
   accountId: z.string().uuid(),
   bank: z.string().min(1).max(100),
-  fileName: z.string().min(1),
-  mimeType: z.string(),
-  base64: z.string().min(1),
+  fileName: z.string().min(1).max(255),
+  mimeType: z.string().max(150),
+  // Roughly 27 MB decoded. Keep the server boundary bounded even if browser
+  // inspection is bypassed.
+  base64: z.string().min(1).max(36_000_000),
 });
 
 /**

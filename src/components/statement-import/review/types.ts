@@ -1,4 +1,7 @@
 import type { MatchSource } from "@/lib/statement-clusters";
+import type { EconomicType } from "@/lib/statement-domain";
+import type { RecurringCandidate } from "@/lib/statement-recurring";
+import type { CorrectionScope } from "@/lib/statement-corrections";
 
 /** A single parsed statement transaction pending review. */
 export type ReviewRow = {
@@ -16,6 +19,24 @@ export type ReviewRow = {
   duplicate: boolean;
   transfer_account_id?: string | null;
   statement_direction?: "debit" | "credit";
+  economic_type?: EconomicType;
+  economic_confidence?: number;
+  economic_source?: string;
+  economic_reasons?: string[];
+  source_fingerprint?: string;
+  source_row_number?: number;
+  value_date?: string | null;
+  original_reference?: string | null;
+  debit?: number | null;
+  credit?: number | null;
+  closing_balance?: number | null;
+  raw_cells?: Array<string | number | boolean | null>;
+  payment_rail?: string;
+  destination_account_id?: string | null;
+  canonical_entity_id?: string | null;
+  processor_entity_id?: string | null;
+  recurring_candidate?: RecurringCandidate;
+  economic_correction_scope?: CorrectionScope;
   /** Why this row was flagged as a duplicate (match keys + confidence). */
   dup?: DuplicateEvidence;
 };

@@ -210,10 +210,20 @@ export const resetHouseholdData = createServerFn({ method: "POST" })
     }
 
     if (scopes.has("transactions")) {
+      await del(sb, "statement_correction_audit", byHh);
+      await del(sb, "statement_economic_rules", byHh);
+      await del(sb, "statement_review_items", byHh);
+      await del(sb, "credit_card_payment_allocations", byHh);
+      await del(sb, "transaction_matches", byHh);
+      await del(sb, "financial_event_transactions", byHh);
+      await del(sb, "transaction_statement_evidence", byHh);
       await del(sb, "transaction_comments", byHh);
       await del(sb, "transaction_activity", byHh);
       await del(sb, "transaction_attachments", byHh);
       await del(sb, "transactions", byHh);
+      await del(sb, "financial_events", byHh);
+      await del(sb, "statement_raw_transactions", byHh);
+      await del(sb, "recurring_mandates", byHh);
       done.push("transactions");
     }
 
@@ -354,10 +364,13 @@ export const resetAccountData = createServerFn({ method: "POST" })
     if (data.transactions || data.deleteAccount) {
       const { data: txns } = await sb
         .from("transactions")
-        .select("id")
+        .select("id, financial_event_id")
         .eq("household_id", hh)
         .or(`account_id.eq.${id},transfer_account_id.eq.${id}`);
       const ids = (txns ?? []).map((t: any) => t.id);
+      const eventIds = (txns ?? [])
+        .map((t: any) => t.financial_event_id)
+        .filter(Boolean);
       if (ids.length) {
         await del(sb, "bill_payments", (q: any) => q.in("transaction_id", ids));
         await del(sb, "transaction_comments", (q: any) => q.in("transaction_id", ids));
@@ -365,6 +378,13 @@ export const resetAccountData = createServerFn({ method: "POST" })
         await del(sb, "transaction_attachments", (q: any) => q.in("transaction_id", ids));
         await del(sb, "transactions", (q: any) => q.in("id", ids));
       }
+      if (eventIds.length) await del(sb, "financial_events", (q: any) => q.in("id", eventIds));
+      await del(sb, "statement_raw_transactions", (q: any) =>
+        q.eq("household_id", hh).eq("account_id", id),
+      );
+      await del(sb, "recurring_mandates", (q: any) =>
+        q.eq("household_id", hh).eq("account_id", id),
+      );
       done.push(`${ids.length} transactions`);
     }
 

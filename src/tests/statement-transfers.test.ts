@@ -160,7 +160,7 @@ export function registerStatementTransferTests() {
       );
     });
 
-    it("removes import-only metadata before inserting ordinary transactions", () => {
+    it("keeps persisted statement direction but removes UI-only row metadata", () => {
       const row = transactionInsertFields({
         txn_date: "2026-10-03",
         amount: 1250,
@@ -170,9 +170,10 @@ export function registerStatementTransferTests() {
         statement_direction: "debit",
         statement_row_key: "row-12",
       });
-      expect(Object.prototype.hasOwnProperty.call(row, "statement_direction")).toBe(false);
+      expect(row.statement_direction).toBe("debit");
       expect(Object.prototype.hasOwnProperty.call(row, "statement_row_key")).toBe(false);
       expect(row.normalized_pattern).toBe("MERCHANT");
+      expect(row.economic_type).toBe("UNKNOWN");
     });
   });
 }
